@@ -1881,6 +1881,77 @@ test('Justify effect class uses the analyzed bounds check',async({page})=>{
   await expect(page.getByRole('dialog').getByLabel('Effect class')).toHaveText('Panic · Bounds check');
 });
 
+test('crate granularity refreshes aggregate and origin audit marks after saves and removals',async({page})=>{
+  await stop();
+  await writeFile(join(dir,'src/lib.rs'),'pub fn first(v: &[u8], i: usize) -> u8 { shared(v, i) }\npub fn second(v: &[u8], i: usize) -> u8 { shared(v, i) }\nfn shared(v: &[u8], i: usize) -> u8 {\n    v[i]\n}\npub fn untouched() {\n    panic!("intentional");\n}\n');
+  await launch();await page.goto(url);
+  await expect(page.locator('.status')).toHaveText('complete');
+  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('effect-source');
+  await page.getByRole('combobox',{name:'Granularity',exact:true}).selectOption('crate');
+  const crate=page.locator('.crate-section'),header=crate.locator('.group');
+  await header.click();
+  const shared=crate.locator('.crate-origin').filter({has:page.locator('strong',{hasText:'::shared'})});
+  const untouched=crate.locator('.crate-origin').filter({has:page.locator('strong',{hasText:'::untouched'})});
+  await expect(shared.locator('.group-count')).toHaveText('2');
+  await expect(crate.locator('.audit-progress')).toHaveCount(0);
+  await shared.click();
+  await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await page.getByLabel('Source documentation',{exact:true}).fill('// PANIC: The caller validates the index.');
+  await dialog.getByRole('button',{name:'Save',exact:true}).click();
+  await expect(header.locator('.audit-progress')).toHaveText('2/3');
+  await expect(shared.getByLabel('Justification saved',{exact:true})).toBeVisible();
+  await expect(untouched.locator('.audit-progress')).toHaveCount(0);
+  await header.click();
+  await expect(header.locator('.audit-progress')).toHaveText('2/3');
+  await header.click();await untouched.click();
+  await page.getByRole('button',{name:'Propagate to callers',exact:true}).click();
+  await page.getByLabel('Source documentation',{exact:true}).fill('/// # Panics\n/// This always panics.');
+  await dialog.getByRole('button',{name:'Save',exact:true}).click();
+  for(const mark of ['Justification saved','Propagation saved'])await expect(header.getByLabel(mark,{exact:true})).toBeVisible();
+  await expect(untouched.getByLabel('Propagation saved',{exact:true})).toBeVisible();
+  await page.getByLabel('Search effect sources',{exact:true}).fill('untouched');
+  await expect(crate.locator('.crate-origin')).toHaveCount(1);
+  await expect(header.getByLabel('Justification saved',{exact:true})).toHaveCount(0);
+  await expect(header.getByLabel('Propagation saved',{exact:true})).toBeVisible();
+  await page.getByLabel('Search effect sources',{exact:true}).fill('');
+  await expect(shared.getByLabel('Justification saved',{exact:true})).toBeVisible();
+  await page.screenshot({path:join(repo,'target/audit-crate-progress.png'),fullPage:true});
+  await page.getByRole('button',{name:'Obligation propagated!',exact:true}).click();
+  await dialog.getByRole('button',{name:'Remove obligation',exact:true}).click();
+  await dialog.getByRole('button',{name:'Confirm removal',exact:true}).click();
+  await expect(header.locator('.audit-progress')).toHaveText('2/3');
+  await expect(untouched.locator('.audit-progress')).toHaveCount(0);
+});
+
+for(const action of ['Justify via override','Propagate obligations via override'])test(`crate granularity refreshes ${action} marks after override removal`,async({page})=>{
+  const dependency=await mkdtemp(join(tmpdir(),'sniff-crate-progress-dep-'));
+  try {
+    await stop();await mkdir(join(dependency,'src'));
+    await writeFile(join(dependency,'Cargo.toml'),'[package]\nname="progress-dep"\nversion="0.1.0"\nedition="2024"\n');
+    await writeFile(join(dependency,'src/lib.rs'),'pub fn risky(flag: bool) {\n    assert!(flag);\n}\n');
+    await writeFile(join(dir,'Cargo.toml'),`[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\nprogress-dep={path=${JSON.stringify(dependency)}}\n`);
+    await writeFile(join(dir,'src/lib.rs'),'pub fn entry(flag: bool) { progress_dep::risky(flag); }\n');
+    await launch();await page.goto(url);await expect(page.locator('.status')).toHaveText('complete');
+    await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('effect-source');
+    await page.getByRole('combobox',{name:'Granularity',exact:true}).selectOption('crate');
+    const crate=page.locator('.crate-section'),header=crate.locator('.group');
+    await header.click();await crate.locator('.crate-origin').click();
+    await page.getByRole('button',{name:action,exact:true}).click();
+    const dialog=page.getByRole('dialog'),justify=action.startsWith('Justify');
+    await dialog.getByLabel('Override documentation').fill(justify?'// PANIC: The caller validates the flag.':'/// # Panics\n/// The caller must validate the flag.');
+    await dialog.getByRole('button',{name:'Save',exact:true}).click();
+    await dialog.getByRole('button',{name:'Create & save',exact:true}).click();
+    const mark=justify?'Justification saved':'Propagation saved';
+    await expect(header.getByLabel(mark,{exact:true})).toBeVisible();
+    await expect(crate.locator('.crate-origin').getByLabel(mark,{exact:true})).toBeVisible();
+    await page.getByRole('button',{name:justify?'Justified!':'Obligation propagated!',exact:true}).click();
+    await dialog.getByRole('button',{name:'Remove override',exact:true}).click();
+    await dialog.getByRole('button',{name:'Confirm removal',exact:true}).click();
+    await expect(crate.locator('.audit-progress')).toHaveCount(0);
+  } finally {await stop();await rm(dependency,{recursive:true,force:true});}
+});
+
 test('crate granularity shows count-only origins and saves boundary trust before reanalysis',async({page})=>{
   await stop();
   await mkdir(join(dir,'dep/src'),{recursive:true});
@@ -1918,6 +1989,8 @@ test('crate granularity shows count-only origins and saves boundary trust before
   await expect(dialog.getByRole('checkbox',{name:/panic/})).toBeChecked();
   await dialog.getByRole('button',{name:'Trust',exact:true}).click();
   await expect(dialog).toHaveCount(0);
+  await expect(dep.locator('.group').getByLabel('Crate trusted',{exact:true})).toBeVisible();
+  await expect(dep.locator('.crate-origin .audit-progress')).toHaveCount(0);
   let config=await readFile(join(dir,'sniff-test.toml'),'utf8');
   expect(config).toContain('"origin_dep::**"');
   expect(config).toContain('# preserve config');
@@ -1927,6 +2000,7 @@ test('crate granularity shows count-only origins and saves boundary trust before
   await dialog.getByRole('button',{name:'Remove',exact:true}).click();
   await expect(dialog).toHaveCount(0);
   config=await readFile(join(dir,'sniff-test.toml'),'utf8');expect(config).not.toContain('origin_dep::**');
+  await expect(dep.getByLabel('Crate trusted',{exact:true})).toHaveCount(0);
   await dep.getByRole('button',{name:'Trust origin_dep',exact:true}).click();
   await dialog.getByRole('button',{name:'Trust',exact:true}).click();
   await expect(dialog).toHaveCount(0);
@@ -1956,7 +2030,9 @@ test('crate granularity preselects the filtered effect and supports multi-effect
   let config=await readFile(join(dir,'sniff-test.toml'),'utf8');
   expect(config.split('[safety]')[0]).toContain('audit_browser_fixture::**');
   expect(config.split('[safety]')[1]).not.toContain('audit_browser_fixture::**');
+  await expect(page.locator('.crate-header').getByLabel('Crate trusted',{exact:true})).toBeVisible();
   await page.getByRole('combobox',{name:'Effect',exact:true}).selectOption('');
+  await expect(page.locator('.crate-header').getByLabel('Crate trusted',{exact:true})).toHaveCount(0);
   await page.getByRole('button',{name:'Trust audit_browser_fixture',exact:true}).click();
   await expect(dialog.getByRole('checkbox',{name:/panic/})).toBeChecked();
   await expect(dialog.getByRole('checkbox',{name:/safety/})).toBeChecked();
@@ -1964,4 +2040,5 @@ test('crate granularity preselects the filtered effect and supports multi-effect
   await expect(dialog).toHaveCount(0);
   config=await readFile(join(dir,'sniff-test.toml'),'utf8');
   expect(config.match(/audit_browser_fixture::\*\*/g)).toHaveLength(2);
+  await expect(page.locator('.crate-header').getByLabel('Crate trusted',{exact:true})).toBeVisible();
 });

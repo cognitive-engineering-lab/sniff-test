@@ -327,6 +327,7 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
                     && filter.granularity == Granularity::Crate
                 {
                     annotate_crate_trust(group, &session)?;
+                    annotate_crate_progress(group, &session);
                 } else {
                     annotate_group_progress(group, &session);
                 }
@@ -408,6 +409,7 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
             if filter.group_by == GroupBy::EffectSource && filter.granularity == Granularity::Crate
             {
                 annotate_crate_trust(group, &session)?;
+                annotate_crate_progress(group, &session);
             } else {
                 annotate_group_progress(group, &session);
             }
@@ -468,7 +470,7 @@ fn list_response(
             .iter()
             .skip(offset)
             .take(limit)
-            .cloned()
+            .map(public_list_item)
             .collect();
         return Ok(Json(
             json!({"items":items,"total":group["item_count"].as_u64().unwrap_or_else(|| group["count"].as_u64().unwrap()),"results_revision":revision}),
@@ -492,7 +494,7 @@ fn list_response(
                         .collect(),
                 )
             } else {
-                group.clone()
+                public_list_item(group)
             }
         })
         .collect();
@@ -501,25 +503,87 @@ fn list_response(
     ))
 }
 
+// Report membership is cached for progress refreshes, but is not part of the list API.
+fn public_list_item(item: &Value) -> Value {
+    Value::Object(
+        item.as_object()
+            .unwrap()
+            .iter()
+            .filter_map(|(key, value)| {
+                if key == "_report_ids" {
+                    None
+                } else if key == "items" {
+                    Some((
+                        key.clone(),
+                        Value::Array(
+                            value
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .map(public_list_item)
+                                .collect(),
+                        ),
+                    ))
+                } else {
+                    Some((key.clone(), value.clone()))
+                }
+            })
+            .collect(),
+    )
+}
+
 fn annotate_progress(value: &mut Value, session: &Session) {
     let progress = session.audit_progress(value["id"].as_str().unwrap_or_default());
     value["progress"] = serde_json::to_value(progress).unwrap();
 }
 
 fn annotate_group_progress(group: &mut Value, session: &Session) {
-    let mut handled = 0;
-    let mut justified = 0;
-    let mut propagated = 0;
     let items = group["items"].as_array_mut().unwrap();
     for item in items.iter_mut() {
         annotate_progress(item, session);
-        let j = item["progress"]["justified"].as_bool().unwrap_or(false);
-        let p = item["progress"]["propagated"].as_bool().unwrap_or(false);
+    }
+    group["progress"] = summarize_progress(
+        items.iter().map(|item| item["id"].as_str().unwrap()),
+        session,
+    );
+}
+
+fn summarize_progress<'a>(ids: impl Iterator<Item = &'a str>, session: &Session) -> Value {
+    let mut handled = 0;
+    let mut justified = 0;
+    let mut propagated = 0;
+    let mut total = 0;
+    for id in ids {
+        let progress = session.audit_progress(id);
+        let j = progress.justified;
+        let p = progress.propagated;
+        total += 1;
         handled += usize::from(j || p);
         justified += usize::from(j);
         propagated += usize::from(p);
     }
-    group["progress"] = json!({"handled":handled,"total":items.len(),"justified":justified,"propagated":propagated});
+    json!({"handled":handled,"total":total,"justified":justified,"propagated":propagated})
+}
+
+fn annotate_crate_progress(group: &mut Value, session: &Session) {
+    let origins = group["items"].as_array_mut().unwrap();
+    for origin in origins.iter_mut() {
+        origin["progress"] = summarize_progress(
+            origin["_report_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|id| id.as_str().unwrap()),
+            session,
+        );
+    }
+    group["progress"] = summarize_progress(
+        origins
+            .iter()
+            .flat_map(|origin| origin["_report_ids"].as_array().unwrap())
+            .map(|id| id.as_str().unwrap()),
+        session,
+    );
 }
 
 fn finding_summary(f: &sniff_test_audit_bridge::Finding) -> serde_json::Value {
@@ -640,7 +704,8 @@ fn group_effect_crates(findings: &[&sniff_test_audit_bridge::Finding], query: &s
                 if let Some(effect) = report["effect"].as_str() { *effects.entry(effect.into()).or_default() += 1; }
             }
             let first = &origin["items"][0];
-            json!({"id":first["id"],"key":origin["key"],"label":origin["label"],"description":origin["description"],"location_label":origin["location_label"],"path":origin["path"],"count":n,"effect":first["effect"]})
+            let report_ids: Vec<_> = origin["items"].as_array().unwrap().iter().map(|report| report["id"].clone()).collect();
+            json!({"id":first["id"],"key":origin["key"],"label":origin["label"],"description":origin["description"],"location_label":origin["location_label"],"path":origin["path"],"count":n,"effect":first["effect"],"_report_ids":report_ids})
         }).collect();
         Some(json!({"key":serde_json::to_string(&name).unwrap(),"label":label,"crate_name":name,"count":count,"item_count":items.len(),"effects":effects,"items":items}))
     }).collect();
@@ -1070,6 +1135,18 @@ mod tests {
         let all: Vec<_> = session.analysis.findings.iter().collect();
         let mut files = group_findings(all.iter().map(|f| finding_summary(f)).collect());
         let mut origins = group_effect_sources(&all, "");
+        let mut crates = group_effect_crates(&all, "");
+        annotate_crate_progress(&mut crates[0], &session);
+        assert_eq!(
+            crates[0]["progress"],
+            json!({"handled":2,"total":3,"justified":2,"propagated":1})
+        );
+        assert_eq!(crates[0]["items"][0]["progress"], crates[0]["progress"]);
+        assert!(
+            public_list_item(&crates[0])["items"][0]
+                .get("_report_ids")
+                .is_none()
+        );
         for group in files.iter_mut().chain(origins.iter_mut()) {
             annotate_group_progress(group, &session);
             assert_eq!(
@@ -1080,6 +1157,9 @@ mod tests {
         let filtered: Vec<_> = all.into_iter().filter(|f| f.id != "pending").collect();
         let mut groups = group_effect_sources(&filtered, "");
         annotate_group_progress(&mut groups[0], &session);
+        let mut crates = group_effect_crates(&filtered, "");
+        annotate_crate_progress(&mut crates[0], &session);
+        assert_eq!(crates[0]["progress"], groups[0]["progress"]);
         assert_eq!(
             groups[0]["progress"],
             json!({"handled":2,"total":2,"justified":2,"propagated":1})
@@ -1413,6 +1493,10 @@ mod tests {
         assert_eq!(headers["groups"].as_array().unwrap().len(), 100);
         assert_eq!(headers["groups"][0]["count"], 151);
         assert_eq!(headers["groups"][0]["item_count"], 150);
+        assert_eq!(
+            headers["groups"][0]["progress"],
+            json!({"handled":0,"total":151,"justified":0,"propagated":0})
+        );
         assert!(headers["groups"][0].get("items").is_none());
         let key = headers["groups"][0]["key"].as_str().unwrap();
         let mut params = url::form_urlencoded::Serializer::new(String::new());
@@ -1429,6 +1513,8 @@ mod tests {
         assert_eq!(rows["total"], 150);
         assert_eq!(rows["items"].as_array().unwrap().len(), 50);
         assert!(rows["items"][0].get("reason").is_none());
+        assert!(rows["items"][0].get("_report_ids").is_none());
+        assert_eq!(rows["items"][0]["progress"]["total"], 1);
         let second = findings(
             State(app.clone()),
             query(&format!("{crate_filter}&offset=100")),
