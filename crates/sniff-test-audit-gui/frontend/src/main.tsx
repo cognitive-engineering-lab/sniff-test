@@ -298,12 +298,11 @@ function App() {
   function rowsKey(key:string){return JSON.stringify([listRevision,listFilter,key]);}
   const [selected,setSelected]=useState<Finding>(),[buffer,setBuffer]=useState<Buffer>(),[text,setText]=useState(''),[target,setTarget]=useState<Location>();
   const [saveState,setSaveState]=useState<SaveState>({status:'saved'}),[reloadKey,setReloadKey]=useState(0),[startingAnalysis,setStartingAnalysis]=useState(false),[opening,setOpening]=useState(false);
-  const [error,setError]=useState(''),[busy,setBusy]=useState(false),[logs,setLogs]=useState(false);
+  const [error,setError]=useState(''),[busy,setBusy]=useState(false);
   const [nav,setNav]=useState<Location[]>([]);
   const [documentationEditor,setDocumentationEditor]=useState<DocumentationEditor>();
   const [confirmRemoval,setConfirmRemoval]=useState(false);
   const [createFile,setCreateFile]=useState(false),[overrideFilename,setOverrideFilename]=useState('sniff-test-overrides.toml');
-  const [savedOverride,setSavedOverride]=useState('');
   const [editorSelection,setEditorSelection]=useState<EditorSelection>();
   const [navigation,setNavigation]=useState<Navigation>(),[navigationStatus,setNavigationStatus]=useState('');
   function acceptStatus(next:Status){setStatus(previous=>{
@@ -573,7 +572,7 @@ function App() {
     const open=crateMode?crateExpanded:inverted?sourceExpanded:expanded;
     for(const group of groups)if(open.has(group.key)&&!group.items&&!group.loading&&!group.loadError)void loadRows(group.key);
   },[groups,expanded,sourceExpanded,crateExpanded,listResult,listKey]);
-  useEffect(()=>{openSequence.current++;navigationRead.current?.abort();setOpening(false);setSelected(undefined);setObligation(undefined);setSavedOverride('');},[status.generation,status.results_revision]);
+  useEffect(()=>{openSequence.current++;navigationRead.current?.abort();setOpening(false);setSelected(undefined);setObligation(undefined);},[status.generation,status.results_revision]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(saver.current?.pending||documentationEditor){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved,documentationEditor]);
   async function openDocumentation(t:Target) {
     if(documentationEditor){document.querySelector<HTMLElement>('.override-drag-handle')?.focus();return;}
@@ -603,7 +602,7 @@ function App() {
     const result=await api('override/commit',{token:documentationEditor.token,destination:documentationEditor.destination,document:documentationEditor.document,filename});
     if(saver.current!.snapshot?.path===result.buffer.path){saver.current!.load(result.buffer);setBuffer(result.buffer);setText(result.buffer.content);}
     acceptStatus(result.status);restoreDocumentationFocus.current=true;
-    setSavedOverride(result.destination);setCreateFile(false);setDocumentationEditor(undefined);
+    setCreateFile(false);setDocumentationEditor(undefined);
   }
 
   async function removeDocumentation() {
@@ -612,7 +611,7 @@ function App() {
     const result=await api('override/remove',{token:documentationEditor.token});
     if(saver.current!.snapshot?.path===result.buffer.path){saver.current!.load(result.buffer);setBuffer(result.buffer);setText(result.buffer.content);}
     acceptStatus(result.status);restoreDocumentationFocus.current=true;
-    setSavedOverride('');setConfirmRemoval(false);setDocumentationEditor(undefined);
+    setConfirmRemoval(false);setDocumentationEditor(undefined);
   }
 
   async function saveSourceAnnotation(remove:boolean) {
@@ -683,14 +682,12 @@ function App() {
     </aside><PanelDivider side="left" size={leftWidth} onResize={setLeftWidth}/></div>
     <main aria-busy={opening}><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];if(await open(previous,false))setNav(n=>n.slice(0,-1));})}>← Back</button><span className="filename" title={buffer?.path}>{buffer?displaySourcePath(buffer.path,root):'Source workspace'}</span>{opening&&<span className="navigation-loading" role="status">Opening source…</span>}{buffer?.writable&&<span className="save-status" role="status" aria-label="Source save status">{saveState.status==='failed'?'Save failed':saveState.status==='saving'?'Saving…':saveState.status==='pending'?'Unsaved changes':'Saved'}</span>}</div>
       {saveState.status==='failed'&&<div className="error source-save-error" role="alert"><span>{saveState.error}</span><button disabled={busy} onClick={()=>act(()=>saver.current!.retry())}>Retry</button><button disabled={busy} onClick={()=>act(()=>navigator.clipboard.writeText(saver.current!.text))}>Copy edits</button><button disabled={busy} onClick={()=>act(reloadSource)}>Reload file</button></div>}
-      {obligationMode&&!obligationSource?<div className="obligation-fallback">{obligation?<><h2>{obligation.namespace}</h2>{obligation.documentation?<ObligationDocumentationPanel documentation={obligation.documentation}/>:<p>Obligation documentation is unavailable.</p>}<p>Verified function source is unavailable.</p><div className="inline-prompt"><button className={obligation.trusted?'completed':''} aria-label={obligation.trusted?'Trusted':'Trust this function'} disabled={busy||status.running||startingAnalysis} onClick={()=>{setError('');setConfirmUntrust(false);setTrustReview(obligation);}}>✓ {obligation.trusted?'Trusted':'Trust this function'}</button><span>Suppress this function’s obligation for {obligation.effect}.</span></div></>:<p>Select a documented obligation.</p>}</div>:buffer?<><div className="buffer-state"><span className="navigation-status">{navigationStatus}</span>{buffer.writable?'Workspace source':'Read-only dependency'}{(status.running||startingAnalysis)&&buffer.writable?' · Editing paused during analysis':''}</div>
-      <Editor hideDocumentation={obligationMode} trustPrompt={obligationMode&&obligation?.declaration?{location:obligation.declaration,trusted:obligation.trusted,run:()=>{setError('');setConfirmUntrust(false);setTrustReview(obligation);}}:undefined} locked={obligationMode||status.running||startingAnalysis||documentationEditor?.mode==='source'} reloadKey={reloadKey} onFlush={flushSource} navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={changeSource} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!startingAnalysis&&(!obligationMode||!busy)} onDocumentation={t=>act(()=>openDocumentation(t))}/>
-      <footer><small>{obligationMode?'Trust saves to the effect’s ignored namespaces. Reanalyze to update findings.':buffer.writable?'Changes save automatically after a short pause. Reanalyze to update findings.':savedOverride?`Saved to ${savedOverride} · Reanalyze to update findings`:'Save in the documentation popup writes directly to an override file.'}</small></footer></>:null}
+      {obligationMode&&!obligationSource?<div className="obligation-fallback">{obligation?<><h2>{obligation.namespace}</h2>{obligation.documentation?<ObligationDocumentationPanel documentation={obligation.documentation}/>:<p>Obligation documentation is unavailable.</p>}<p>Verified function source is unavailable.</p><div className="inline-prompt"><button className={obligation.trusted?'completed':''} aria-label={obligation.trusted?'Trusted':'Trust this function'} disabled={busy||status.running||startingAnalysis} onClick={()=>{setError('');setConfirmUntrust(false);setTrustReview(obligation);}}>✓ {obligation.trusted?'Trusted':'Trust this function'}</button><span>Suppress this function’s obligation for {obligation.effect}.</span></div></>:null}</div>:buffer?<><div className="buffer-state"><span className="navigation-status">{navigationStatus}</span>{buffer.writable?'Workspace source':'Read-only dependency'}{(status.running||startingAnalysis)&&buffer.writable?' · Editing paused during analysis':''}</div>
+      <Editor hideDocumentation={obligationMode} trustPrompt={obligationMode&&obligation?.declaration?{location:obligation.declaration,trusted:obligation.trusted,run:()=>{setError('');setConfirmUntrust(false);setTrustReview(obligation);}}:undefined} locked={obligationMode||status.running||startingAnalysis||documentationEditor?.mode==='source'} reloadKey={reloadKey} onFlush={flushSource} navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={changeSource} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!startingAnalysis&&(!obligationMode||!busy)} onDocumentation={t=>act(()=>openDocumentation(t))}/></>:null}
 
     </main>
     <div className="side-pane right-pane" id="details-panel"><PanelDivider side="right" size={rightWidth} onResize={setRightWidth}/><aside className="details" aria-label="Effect details">{obligationMode?obligation?<section className="effect-summary" aria-label="Selected obligation"><div className="section-title">OBLIGATION DETAILS</div><p>{obligation.namespace}</p><p>{obligation.effect} · {obligation.count} reports</p><p>{obligation.trusted?'Trusted · reanalyze to update findings':'Trust suppresses this function’s obligation for this effect.'}</p><small>{obligation.config_path}</small></section>:<div className="empty">Select an obligation to inspect its documentation.</div>:selected?<><section className="effect-summary" aria-label="Selected effect"><div className="section-title">FINDING DETAILS</div><p>{selected.reason}</p><small>{selected.crate_name} · trace {selected.trace_id||'unavailable'}</small></section>
       <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Navigation and call trace"><h3>Navigate</h3>{[['Report root','root'],['Effect source','source'],['Contract','contract']].map(([label,kind])=><button className="link" key={label} disabled={!destination(selected,kind as 'source'|'root'|'contract')?.available} onClick={()=>act(()=>navigateFinding(kind as 'source'|'root'|'contract'))}>{label}{!destination(selected,kind as 'source'|'root'|'contract')?.available?' · unavailable':''}</button>)}
-      {buffer&&!buffer.writable&&<p className="hint">Dependency source is read-only. Contract documentation can be supplied through an override file.</p>}
       {selected.audit&&!selected.audit.targets.length&&<p className="hint">No verified documentation attachment location is available. Inspect the source and edit manually where appropriate.</p>}
       {status.override_error?<p className="hint" role="alert">{status.override_error}</p>:null}
       {target?.approximate?<p className="hint" role="status">Approximate location; reanalyze to refresh.</p>:null}
@@ -701,7 +698,7 @@ function App() {
       {error&&<p role="alert">{error}</p>}
       <p>Namespace: <code>{crateReview.namespace}</code></p>
       <fieldset className="crate-effects" disabled={busy||status.running||startingAnalysis}><legend>Effects</legend>{crateReview.effects.map(entry=><label key={entry.effect}><input type="checkbox" checked={crateEffects.includes(entry.effect)} onChange={event=>setCrateEffects(previous=>event.target.checked?[...previous,entry.effect]:previous.filter(e=>e!==entry.effect))}/><span>{entry.effect}{entry.trusted?' · Trusted':''}</span><small>{entry.count} reports</small></label>)}</fieldset>
-      <p>Save to: <code>{crateReview.config_path}</code></p>
+      <p>Override file: <code>{displaySourcePath(crateReview.config_path,root)}</code></p>
       <div className="modal-actions"><button disabled={busy} onClick={()=>setCrateReview(undefined)}>Close</button><button disabled={busy||status.running||startingAnalysis||!crateEffects.length||!crateEffects.every(effect=>crateReview.effects.some(e=>e.effect===effect&&e.exact))} onClick={()=>act(()=>saveCrateTrust(true))}>Remove</button><button className="primary" disabled={busy||status.running||startingAnalysis||!crateEffects.length||crateEffects.every(effect=>crateReview.effects.some(e=>e.effect===effect&&e.trusted))} onClick={()=>act(()=>saveCrateTrust())}>Trust</button></div>
     </DocumentationPanel>}
     {trustReview&&<DocumentationPanel source title="Function trust" step={confirmUntrust?'remove':'review'} onClose={()=>{if(!busy)setTrustReview(undefined);}}>
@@ -719,14 +716,14 @@ function App() {
       {!createFile?<>
       {error&&<p role="alert">{error}</p>}
       {confirmRemoval?<>
-        <p className="override-removal">Remove this saved {documentationEditor.mode==='source'?(documentationEditor.action==='justification'?'justification':'obligation'):'override'} from <strong>{documentationEditor.saved_destination}</strong>?</p>
+        <p className="override-removal">Remove this saved {documentationEditor.mode==='source'?(documentationEditor.action==='justification'?'justification':'obligation'):'override'} from <strong>{displaySourcePath(documentationEditor.saved_destination,root)}</strong>?</p>
         <p>Only this annotation will be removed. Reanalyze to update findings.</p>
         <div className="modal-actions"><button disabled={busy} onClick={()=>setConfirmRemoval(false)}>Cancel</button><button disabled={busy||status.running} onClick={()=>act(removeDocumentation)}>Confirm removal</button></div>
       </>:<>
       {documentationEditor.action==='justification'&&documentationEditor.obligation_documentation&&<ObligationDocumentationPanel documentation={documentationEditor.obligation_documentation}/>}
       {documentationEditor.action==='justification'&&!documentationEditor.obligation_documentation&&documentationEditor.effect_context&&<p className="effect-class-label" aria-label="Effect class">{effectContextLabel(documentationEditor.effect_context)}</p>}
       <textarea ref={placeCaretAtEnd} autoFocus disabled={busy} aria-label={documentationEditor.mode==='source'?'Source documentation':'Override documentation'} value={documentationEditor.document} onChange={e=>setDocumentationEditor({...documentationEditor,document:e.target.value})}/>
-      {documentationEditor.mode==='source'?<label className="override-destination">Source file<small>{displaySourcePath(documentationEditor.destination,root)}:{documentationEditor.line}</small></label>:<label className="override-destination">Override file{documentationEditor.destinations.length>1?<select aria-label="Override file" value={documentationEditor.destination} disabled={busy} onChange={e=>setDocumentationEditor({...documentationEditor,destination:e.target.value})}>{documentationEditor.destinations.map(d=><option key={d.path} value={d.path}>{d.path}</option>)}</select>:<small>{documentationEditor.destination}</small>}</label>}
+      {documentationEditor.mode==='source'?<label className="override-destination">Source file<small>{displaySourcePath(documentationEditor.destination,root)}:{documentationEditor.line}</small></label>:<label className="override-destination">Override file{documentationEditor.destinations.length>1?<select aria-label="Override file" value={documentationEditor.destination} disabled={busy} onChange={e=>setDocumentationEditor({...documentationEditor,destination:e.target.value})}>{documentationEditor.destinations.map(d=><option key={d.path} value={d.path}>{displaySourcePath(d.path,root)}</option>)}</select>:<small>{displaySourcePath(documentationEditor.destination,root)}</small>}</label>}
       <div className="modal-actions">{documentationEditor.can_remove&&<button disabled={busy||status.running} onClick={()=>setConfirmRemoval(true)}>{documentationEditor.mode==='source'?(documentationEditor.action==='justification'?'Remove justification':'Remove obligation'):'Remove override'}</button>}<button disabled={busy} onClick={()=>setDocumentationEditor(undefined)}>Cancel</button><button className="primary" disabled={busy||status.running} onClick={()=>act(async()=>{if(documentationEditor.mode==='override'&&!documentationEditor.destinations.find(d=>d.path===documentationEditor.destination)?.exists){setCreateFile(true);return;}await commitDocumentation();})}>Save</button></div>
       </>}
       </>:<>
@@ -736,7 +733,6 @@ function App() {
       <div className="modal-actions"><button disabled={busy} onClick={()=>setCreateFile(false)}>Cancel</button><button className="primary" disabled={busy||status.running||!overrideFilename.trim()} onClick={()=>act(()=>commitDocumentation(overrideFilename))}>Create &amp; save</button></div>
       </>}
     </DocumentationPanel>}
-    <div className="analysis-log"><button onClick={()=>setLogs(!logs)}>{logs?'▾':'▸'} Analysis output</button><span>{status.count} findings</span>{logs&&<pre>{status.log||'Waiting for analysis output…'}</pre>}</div>
   </div>;
 }
 createRoot(document.getElementById('root')!).render(<App/>);

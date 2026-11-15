@@ -1145,7 +1145,6 @@ for(const action of ['Justify via override','Propagate obligations via override'
         await expect(page.locator('.group').getByLabel(mark,{exact:true})).toBeVisible();
         await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('file');
         await expect(page.getByRole('button',{name:alternative,exact:true})).toHaveCount(0);
-        await expect(page.locator('footer')).toContainText(existing?'two.toml':'custom-overrides.toml');
         expect(await readFile(destination,'utf8')).toContain('The flag is checked by the caller.');
         expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
         if(existing)expect(await readFile(join(dir,'one.toml'),'utf8')).toBe(original);
@@ -1154,6 +1153,7 @@ for(const action of ['Justify via override','Propagate obligations via override'
         await page.getByRole('button',{name:completed,exact:true}).click();
         if(action.startsWith('Justify'))await expect(dialog.getByLabel('Effect class')).toContainText('Panic · ');
         if(existing)await expect(dialog.getByLabel('Override file',{exact:true})).toHaveValue(/\/two\.toml$/);
+        await expect(dialog.locator('.override-destination')).toHaveText(existing?'Override fileone.tomltwo.toml':'Override filecustom-overrides.toml');
         await expect(dialog.getByRole('button',{name:'Save draft',exact:true})).toHaveCount(0);
         await dialog.getByLabel('Override documentation').fill(template+'A revised explanation.');
         await dialog.getByRole('button',{name:'Save',exact:true}).click();
