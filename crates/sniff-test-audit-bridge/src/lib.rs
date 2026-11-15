@@ -1,6 +1,9 @@
 //! Shared auditing workflow. No HTTP, terminal, browser, or rustc dependencies.
+mod crate_trust;
+mod namespace_trust;
 mod navigation;
 mod obligations;
+pub use crate_trust::{CrateEffectTrust, CrateTrustDetail, source_crate};
 pub use obligations::{ObligationDetail, ObligationSummary, group_obligations};
 mod overrides;
 mod progress;
@@ -273,6 +276,7 @@ pub struct Session {
     pub config: AnalysisConfig,
     pub analysis: Analysis,
     default_ignored_namespaces: BTreeMap<String, Vec<String>>,
+    default_boundary_namespaces: BTreeMap<String, Vec<String>>,
     buffers: BTreeMap<String, Buffer>,
     metadata_file: PathBuf,
     allowed_external: BTreeSet<PathBuf>,
@@ -295,6 +299,10 @@ impl Session {
     /// Supply registered effect defaults without coupling the auditor to rustc or effect policy.
     pub fn set_default_ignored_namespaces(&mut self, defaults: BTreeMap<String, Vec<String>>) {
         self.default_ignored_namespaces = defaults;
+    }
+
+    pub fn set_default_boundary_namespaces(&mut self, defaults: BTreeMap<String, Vec<String>>) {
+        self.default_boundary_namespaces = defaults;
     }
 
     pub fn finding(&self, id: &str) -> Option<&Finding> {
@@ -354,6 +362,7 @@ impl Session {
             },
             buffers,
             default_ignored_namespaces: BTreeMap::new(),
+            default_boundary_namespaces: BTreeMap::new(),
             metadata_file,
             allowed_external: BTreeSet::new(),
             definition_sources: BTreeSet::new(),

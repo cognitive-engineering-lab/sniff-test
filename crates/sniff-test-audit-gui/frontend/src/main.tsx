@@ -11,6 +11,7 @@ import {Autosave, type SaveState} from './autosave';
 import {displaySourcePath} from './source-path';
 import {ObligationDocumentationPanel, type ObligationDocumentation} from './obligation-documentation';
 
+type CrateTrust = {crate_name:string;namespace:string;effects:{effect:string;count:number;trusted:boolean;exact:boolean}[];config_path:string;config_hash?:string;results_revision:number};
 type DisplayMode = 'file'|'effect-source'|'obligation';
 type Obligation = {key:string;effect:string;namespace:string;count:number;documentation?:ObligationDocumentation;declaration?:Location;trusted:boolean;config_path:string;config_hash?:string;results_revision:number};
 type TrustPrompt = {location:Location;trusted:boolean;run:()=>void};
@@ -42,8 +43,8 @@ type FindingNavigation = {source?:Location;root?:Location;contract?:Location;tra
 type Finding = {navigation?:FindingNavigation;id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; targets:Target[]; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
 type AuditProgress = {justified:boolean;propagated:boolean};
 type GroupProgress = {handled:number;total:number;justified:number;propagated:number};
-type Summary = {progress?:AuditProgress;id:string; crate_name:string; root:string; reason:string; level:string; effect:string; class:string; path?:string};
-type FindingGroup = {trusted?:boolean;progress?:GroupProgress;key:string; label?:string; path?:string; count:number; items?:Summary[]; loading?:boolean; loadError?:string};
+type Summary = {description?:string;location_label?:string;label?:string;count?:number;progress?:AuditProgress;id:string; crate_name:string; root:string; reason:string; level:string; effect:string; class:string; path?:string};
+type FindingGroup = {crate_name?:string;item_count?:number;effects?:Record<string,number>;trusted?:boolean;progress?:GroupProgress;key:string; label?:string; path?:string; count:number; items?:Summary[]; loading?:boolean; loadError?:string};
 type Status = {results_revision?:number;audit_revision?:number;override_revision?:number; override_error?:string; generation:number; running:boolean; stale:boolean; overrides_changed?:boolean; status:string; count:number; log:string};
 const token = location.hash.slice(1) || sessionStorage.getItem('audit-token') || '';
 if (token) { sessionStorage.setItem('audit-token', token); history.replaceState(null, '', location.pathname); }
@@ -267,27 +268,32 @@ function App() {
   const [groups,setGroups]=useState<FindingGroup[]>([]),[total,setTotal]=useState(0),[totalGroups,setTotalGroups]=useState(0),[effects,setEffects]=useState<string[]>([]);
   const [mode,setMode]=useState<DisplayMode>('file');
   const inverted=mode==='effect-source',obligationMode=mode==='obligation';
-  const modeIndex=mode==='file'?0:inverted?1:2;
+  const [granularity,setGranularity]=useState<'origin'|'crate'>('origin');
+  const crateMode=inverted&&granularity==='crate';
+  const modeIndex=mode==='file'?0:inverted?(crateMode?3:1):2;
+  const [crateExpanded,setCrateExpanded]=useState<Set<string>>(()=>new Set());
+  const [crateReview,setCrateReview]=useState<CrateTrust>();
+  const [crateEffects,setCrateEffects]=useState<string[]>([]);
   const [obligation,setObligation]=useState<Obligation>();
   const [obligationSource,setObligationSource]=useState(false);
   const [expanded,setExpanded]=useState<Set<string>>(()=>new Set());
   const [sourceExpanded,setSourceExpanded]=useState<Set<string>>(()=>new Set());
   const [query,setQuery]=useState(''),[effect,setEffect]=useState(''),[level,setLevel]=useState(''),[kind,setKind]=useState('');
-  const [pages,setPages]=useState([0,0,0]);
+  const [pages,setPages]=useState([0,0,0,0]);
   const page=pages[modeIndex];
   function setPage(value:number|((page:number)=>number)){listScroll.current[modeIndex]=0;setPages(previous=>previous.map((p,i)=>i===modeIndex?typeof value==='function'?value(p):value:p));}
-  function resetPages(){setPages([0,0,0]);listScroll.current=[0,0,0];}
-  const listElement=useRef<HTMLDivElement>(null),listScroll=useRef([0,0,0]);
+  function resetPages(){setPages([0,0,0,0]);listScroll.current=[0,0,0,0];}
+  const listElement=useRef<HTMLDivElement>(null),listScroll=useRef([0,0,0,0]);
   const listCache=useRef(new Map<string,{groups:FindingGroup[];total:number;total_groups:number;effects:string[]}>());
   const rowCache=useRef(new Map<string,Summary[]>());
   const rowReads=useRef(new Map<string,AbortController>());
   const [listLoading,setListLoading]=useState(false),[listFailure,setListFailure]=useState(''),[listRetry,setListRetry]=useState(0);
   const [listResult,setListResult]=useState('');
   const listRevision=JSON.stringify([status.results_revision,status.generation,status.running,status.audit_revision,status.override_revision]);
-  const listFilter=JSON.stringify([query,effect,level,obligationMode?'':kind,mode]);
+  const listFilter=JSON.stringify([query,effect,level,obligationMode?'':kind,mode,crateMode?'crate':'origin']);
   const listKey=JSON.stringify([listRevision,listFilter,page]);
   const activeList=useRef(listKey);activeList.current=listKey;
-  const filters=()=>({q:query,effect,level,class:obligationMode?'':kind,grouped:'true',group_by:mode});
+  const filters=()=>({q:query,effect,level,class:obligationMode?'':kind,grouped:'true',group_by:mode,granularity:crateMode?'crate':'origin'});
   function cacheRows(key:string,rows:Summary[]){rowCache.current.delete(key);rowCache.current.set(key,rows);if(rowCache.current.size>32)rowCache.current.delete(rowCache.current.keys().next().value!);}
   function rowsKey(key:string){return JSON.stringify([listRevision,listFilter,key]);}
   const [selected,setSelected]=useState<Finding>(),[buffer,setBuffer]=useState<Buffer>(),[text,setText]=useState(''),[target,setTarget]=useState<Location>();
@@ -470,13 +476,28 @@ function App() {
     setConfirmUntrust(false);
     acceptStatus(result.status);
   }
-  async function choose(item:Summary){
+  async function reviewCrate(group:FindingGroup){
+    const detail:CrateTrust=await api('crate/trust?'+new URLSearchParams({crate_name:group.crate_name!}));
+    setCrateReview(detail);
+    setCrateEffects(Object.keys(group.effects||{}).filter(e=>!effect||e===effect));
+    setError('');
+  }
+  async function saveCrateTrust(remove=false){
+    if(!crateReview)return;
+    await saver.current!.flush();
+    const result=await api(remove?'crate/untrust':'crate/trust',{crate_name:crateReview.crate_name,effects:crateEffects,results_revision:crateReview.results_revision,config_hash:crateReview.config_hash??null});
+    setGroups(previous=>previous.map(group=>group.crate_name===result.crate.crate_name?{...group,trusted:Object.keys(group.effects||{}).every(effect=>result.crate.effects.some((entry:CrateTrust['effects'][number])=>entry.effect===effect&&entry.trusted))}:group));
+    setCrateReview(undefined);
+    acceptStatus(result.status);
+  }
+  async function choose(item:Summary,sourceOnly=false){
     const sequence=startNavigation();
     try {
       await saver.current!.flush();if(sequence!==openSequence.current)return;
       const finding:Finding=await api('finding?'+new URLSearchParams({id:item.id}),undefined,navigationRead.current?.signal);
       if(sequence!==openSequence.current)return;
-      const location=[destination(finding,'source'),destination(finding,'root')].find(value=>value?.available);
+      const location=(sourceOnly?[destination(finding,'source')]:[destination(finding,'source'),destination(finding,'root')]).find(value=>value?.available);
+      if(sourceOnly&&!location)throw Error('Source is unavailable for this origin.');
       if(!location||await open(location,true,sequence))setSelected(finding);
     }catch(e){if(sequence===openSequence.current)throw e;}
     finally{if(sequence===openSequence.current)setOpening(false);}
@@ -549,9 +570,9 @@ function App() {
   useEffect(()=>{
     if(listResult!==listKey)return;
     if(obligationMode)return;
-    const open=inverted?sourceExpanded:expanded;
+    const open=crateMode?crateExpanded:inverted?sourceExpanded:expanded;
     for(const group of groups)if(open.has(group.key)&&!group.items&&!group.loading&&!group.loadError)void loadRows(group.key);
-  },[groups,expanded,sourceExpanded,listResult,listKey]);
+  },[groups,expanded,sourceExpanded,crateExpanded,listResult,listKey]);
   useEffect(()=>{openSequence.current++;navigationRead.current?.abort();setOpening(false);setSelected(undefined);setObligation(undefined);setSavedOverride('');},[status.generation,status.results_revision]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(saver.current?.pending||documentationEditor){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved,documentationEditor]);
   async function openDocumentation(t:Target) {
@@ -635,16 +656,30 @@ function App() {
           <option value="obligation">Invert obligation</option>
         </select>
       </label>
-      <input aria-label={obligationMode?'Search obligations':inverted?'Search effect sources':'Search findings'} placeholder={obligationMode?'Search functions, obligations…':inverted?'Search effect sources…':'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);resetPages();}}/>
+      {inverted&&<label className="display-mode"><strong>Granularity:</strong><select aria-label="Granularity" value={granularity} disabled={!!documentationEditor} onChange={e=>setGranularity(e.target.value as 'origin'|'crate')}><option value="origin">Effect origin</option><option value="crate">Crate</option></select></label>}
+      <input aria-label={obligationMode?'Search obligations':inverted?'Search effect sources':'Search findings'} placeholder={obligationMode?'Search functions, obligations…':inverted?(crateMode?'Search crates or origins…':'Search effect sources…'):'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);resetPages();}}/>
       <div className="filters"><select aria-label="Effect" value={effect} onChange={e=>{setEffect(e.target.value);resetPages();}}><option value="">All effects</option>{effects.map(e=><option key={e}>{e}</option>)}</select><select aria-label="Severity" value={level} onChange={e=>{setLevel(e.target.value);resetPages();}}><option value="">All levels</option><option>warn</option><option>deny</option></select></div>
       {!obligationMode&&<select aria-label="Finding class" value={kind} onChange={e=>{setKind(e.target.value);resetPages();}}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>}
-      <div className="finding-list" ref={listElement} aria-busy={listLoading||listResult!==listKey} onScroll={e=>{if(listResult===listKey)listScroll.current[modeIndex]=e.currentTarget.scrollTop;}}>{(listLoading||listResult!==listKey)&&<div className="loading" role="status">Loading {obligationMode?'obligations':inverted?'effect sources':'files'}…</div>}{(listResult===listKey?groups:[]).map(({key, label,path:sourcePath,items:rows,count,progress,trusted,loading,loadError},index)=>{
+      <div className="finding-list" ref={listElement} aria-busy={listLoading||listResult!==listKey} onScroll={e=>{if(listResult===listKey)listScroll.current[modeIndex]=e.currentTarget.scrollTop;}}>{(listLoading||listResult!==listKey)&&<div className="loading" role="status">Loading {obligationMode?'obligations':inverted?'effect sources':'files'}…</div>}{(listResult===listKey?groups:[]).map(({key, label,path:sourcePath,items:rows,count,progress,trusted,loading,loadError,crate_name,item_count,effects:groupEffects},index)=>{
         const path=label||key;
         if(obligationMode)return <button type="button" className={'group obligation-row '+(obligation?.key===key?'selected':'')} key={key} onClick={()=>act(()=>chooseObligation({key,label,count}))}><span className="group-path">{label}</span>{trusted&&<span className="audit-progress"><span role="img" aria-label="Function trusted" title="Trust saved; reanalyze to update findings">✓</span></span>}<span className="group-count" aria-label={`${count} reports`}>{count}</span></button>;
+        if(crateMode){
+          const isOpen=crateExpanded.has(key),listId=`crate-origins-${index}`,originCount=item_count||0;
+          return <section key={key} className="crate-section">
+            <div className="crate-header"><button type="button" className="group" title={label} aria-expanded={isOpen} aria-controls={listId} onClick={()=>setCrateExpanded(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}><span className="group-chevron" aria-hidden="true">{isOpen?'▾':'▸'}</span><span className="group-path">{label}</span><span className="group-count" aria-label={`${count} reports`}>{count}</span></button>
+              {crate_name&&<button className={'crate-trust'+(trusted?' completed':'')} disabled={busy||status.running||startingAnalysis} aria-label={`${trusted?'Trusted':'Trust'} ${crate_name}`} onClick={()=>act(()=>reviewCrate({key,count,crate_name,effects:groupEffects}))}>{trusted?'✓ Trusted':'Trust'}</button>}
+            </div>
+            <div id={listId} hidden={!isOpen}>{isOpen&&(rows||[]).map(item=><button type="button" className={'finding crate-origin '+(selected?.id===item.id?'selected':'')} title={item.label} key={item.id} onClick={()=>act(()=>choose(item,true))}><span className="finding-label"><span className="badge">{item.effect||item.class}</span><span className="group-count" aria-label={`${item.count} reports`}>{item.count}</span></span><strong>{item.description}</strong><small>{item.path?item.location_label?.replace(item.path,()=>displaySourcePath(item.path!,root)):item.location_label}</small></button>)}
+              {isOpen&&loading&&<div className="loading" role="status">Loading origins…</div>}
+              {isOpen&&loadError&&<div role="alert">{loadError}<button onClick={()=>void loadRows(key)}>Retry</button></div>}
+              {isOpen&&rows&&rows.length<originCount&&<button className="load-more" disabled={loading} onClick={()=>void loadRows(key,true)}>Load more ({rows.length} of {originCount} origins)</button>}
+            </div>
+          </section>;
+        }
         const isOpen=(inverted?sourceExpanded:expanded).has(key),listId=`${inverted?'source':'file'}-findings-${index}`;
         return <section key={key}><button type="button" className="group" title={path} aria-expanded={isOpen} aria-controls={listId} onClick={()=>(inverted?setSourceExpanded:setExpanded)(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}><span className="group-chevron" aria-hidden="true">{isOpen?'▾':'▸'}</span><span className="group-path">{sourcePath?path.replace(sourcePath,()=>displaySourcePath(sourcePath,root)):displaySourcePath(path,root)}</span><AuditMarks progress={progress} group/><span className="group-count" aria-label={`${count} ${inverted?'reports':'effects'}`} >{count}</span></button><div id={listId} hidden={!isOpen}>{isOpen&&(rows||[]).map(item=><button className={'finding '+(selected?.id===item.id?'selected':'')} key={item.id} onClick={()=>act(()=>choose(item))}><span className="finding-label"><span className="badge">{item.effect||item.class}</span><AuditMarks progress={item.progress}/></span><strong>{item.root||item.crate_name}</strong><small>{item.reason}</small></button>)}{isOpen&&loading&&<div className="loading" role="status">Loading findings…</div>}{isOpen&&loadError&&<div role="alert">{loadError}<button onClick={()=>void loadRows(key)}>Retry</button></div>}{isOpen&&rows&&rows.length<count&&<button className="load-more" disabled={loading} onClick={()=>void loadRows(key,true)}>Load more ({rows.length} of {count})</button>}</div></section>;
       })}{listResult===listKey&&listFailure&&<div role="alert">{listFailure}<button onClick={()=>setListRetry(value=>value+1)}>Retry findings</button></div>}{listResult===listKey&&!listLoading&&!listFailure&&!groups.length&&<div className="empty">{status.running?'Analyzing the workspace…':status.status==='complete'?'No matching findings.':'No findings available. Check analysis output.'}</div>}</div>
-      <div className="pagination"><button aria-label={obligationMode?'Previous obligations':inverted?'Previous effect sources':'Previous files'} disabled={page===0} onClick={()=>setPage(p=>p-1)}>←</button><span>{obligationMode?'Obligations':inverted?'Effect sources':'Files'} · {page+1} / {Math.max(1,Math.ceil(totalGroups/100))}</span><button aria-label={obligationMode?'Next obligations':inverted?'Next effect sources':'Next files'} disabled={(page+1)*100>=totalGroups} onClick={()=>setPage(p=>p+1)}>→</button></div>
+      <div className="pagination"><button aria-label={obligationMode?'Previous obligations':inverted?(crateMode?'Previous crates':'Previous effect sources'):'Previous files'} disabled={page===0} onClick={()=>setPage(p=>p-1)}>←</button><span>{obligationMode?'Obligations':inverted?(crateMode?'Crates':'Effect sources'):'Files'} · {page+1} / {Math.max(1,Math.ceil(totalGroups/100))}</span><button aria-label={obligationMode?'Next obligations':inverted?(crateMode?'Next crates':'Next effect sources'):'Next files'} disabled={(page+1)*100>=totalGroups} onClick={()=>setPage(p=>p+1)}>→</button></div>
     </aside><PanelDivider side="left" size={leftWidth} onResize={setLeftWidth}/></div>
     <main aria-busy={opening}><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];if(await open(previous,false))setNav(n=>n.slice(0,-1));})}>← Back</button><span className="filename" title={buffer?.path}>{buffer?displaySourcePath(buffer.path,root):'Source workspace'}</span>{opening&&<span className="navigation-loading" role="status">Opening source…</span>}{buffer?.writable&&<span className="save-status" role="status" aria-label="Source save status">{saveState.status==='failed'?'Save failed':saveState.status==='saving'?'Saving…':saveState.status==='pending'?'Unsaved changes':'Saved'}</span>}</div>
       {saveState.status==='failed'&&<div className="error source-save-error" role="alert"><span>{saveState.error}</span><button disabled={busy} onClick={()=>act(()=>saver.current!.retry())}>Retry</button><button disabled={busy} onClick={()=>act(()=>navigator.clipboard.writeText(saver.current!.text))}>Copy edits</button><button disabled={busy} onClick={()=>act(reloadSource)}>Reload file</button></div>}
@@ -662,6 +697,13 @@ function App() {
       {unsaved||status.stale?<p className="hint">Findings are outdated. Reanalyze to refresh them.</p>:null}
       <h3>Call trace</h3><ol className="trace" reversed={inverted}>{traceEntries.map(({step,i})=><li key={i} value={i+1}><button className={highlightedTraceIndex===i?'active':''} aria-current={highlightedTraceIndex===i?'location':undefined} disabled={!step.location?.available} onClick={()=>act(()=>navigateFinding(i))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':displaySourcePath(step.location.path,root)}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':step.location.approximate?' · approximate':''}</small></button></li>)}</ol></div>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div></div>
+    {crateReview&&<DocumentationPanel source title="Crate trust" step="review" onClose={()=>{if(!busy)setCrateReview(undefined);}}>
+      {error&&<p role="alert">{error}</p>}
+      <p>Namespace: <code>{crateReview.namespace}</code></p>
+      <fieldset className="crate-effects" disabled={busy||status.running||startingAnalysis}><legend>Effects</legend>{crateReview.effects.map(entry=><label key={entry.effect}><input type="checkbox" checked={crateEffects.includes(entry.effect)} onChange={event=>setCrateEffects(previous=>event.target.checked?[...previous,entry.effect]:previous.filter(e=>e!==entry.effect))}/><span>{entry.effect}{entry.trusted?' · Trusted':''}</span><small>{entry.count} reports</small></label>)}</fieldset>
+      <p>Save to: <code>{crateReview.config_path}</code></p>
+      <div className="modal-actions"><button disabled={busy} onClick={()=>setCrateReview(undefined)}>Close</button><button disabled={busy||status.running||startingAnalysis||!crateEffects.length||!crateEffects.every(effect=>crateReview.effects.some(e=>e.effect===effect&&e.exact))} onClick={()=>act(()=>saveCrateTrust(true))}>Remove</button><button className="primary" disabled={busy||status.running||startingAnalysis||!crateEffects.length||crateEffects.every(effect=>crateReview.effects.some(e=>e.effect===effect&&e.trusted))} onClick={()=>act(()=>saveCrateTrust())}>Trust</button></div>
+    </DocumentationPanel>}
     {trustReview&&<DocumentationPanel source title="Function trust" step={confirmUntrust?'remove':'review'} onClose={()=>{if(!busy)setTrustReview(undefined);}}>
       {error&&<p role="alert">{error}</p>}
       {trustReview.documentation?<ObligationDocumentationPanel documentation={trustReview.documentation}/>:<p>Obligation documentation is unavailable.</p>}

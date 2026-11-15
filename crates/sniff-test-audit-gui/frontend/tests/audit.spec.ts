@@ -5,8 +5,8 @@ import {tmpdir} from 'node:os';
 import {resolve, join} from 'node:path';
 const repo = resolve('../../..');
 let dir:string, server:ChildProcess, url:string;
-async function launch(effect="panic") {
-  server=spawn(join(repo,'target/debug/cargo-sniff-test'),['--audit','gui','-e',effect],{cwd:dir,detached:process.platform!=="win32",env:{...process.env,SNIFF_TEST_AUDIT_NO_OPEN:'1'}});
+async function launch(effect="panic", moreEffects:string[]=[]) {
+  server=spawn(join(repo,'target/debug/cargo-sniff-test'),['--audit','gui',...[effect,...moreEffects].flatMap(value=>['-e',value])],{cwd:dir,detached:process.platform!=="win32",env:{...process.env,SNIFF_TEST_AUDIT_NO_OPEN:'1'}});
   url=await new Promise<string>((resolve,reject)=>{let output='';const timeout=setTimeout(()=>reject(Error(output||'server launch timed out')),20000);server.stderr!.on('data',data=>{output+=data;const match=output.match(/Audit GUI: (http:\/\/[^\s]+)/);if(match){clearTimeout(timeout);resolve(match[1]);}});server.once('exit',code=>{clearTimeout(timeout);reject(Error(`server exited ${code}: ${output}`));});});
 }
 async function stop(){if(server?.exitCode===null && server?.signalCode===null){await new Promise<void>(resolve=>{server.once('exit',()=>resolve());if(process.platform==='win32')server.kill('SIGTERM');else process.kill(-server.pid!,'SIGTERM');});}}
@@ -1790,4 +1790,89 @@ test('Justify effect class uses the analyzed bounds check',async({page})=>{
   await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();
   await page.getByRole('button',{name:'Propagate to callers',exact:true}).click();
   await expect(page.getByRole('dialog').getByLabel('Effect class')).toHaveCount(0);
+});
+
+test('crate granularity shows count-only origins and saves boundary trust before reanalysis',async({page})=>{
+  await stop();
+  await mkdir(join(dir,'dep/src'),{recursive:true});
+  await writeFile(join(dir,'dep/Cargo.toml'),'[package]\nname="origin-dep"\nversion="0.1.0"\nedition="2024"\n');
+  await writeFile(join(dir,'dep/src/lib.rs'),'#[inline(never)]\npub fn lookup(values: &[u8], index: usize) -> u8 { values[index] }\n');
+  await writeFile(join(dir,'Cargo.toml'),'[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[dependencies]\norigin-dep={path="dep"}\n[workspace]\nexclude=["dep"]\n');
+  await writeFile(join(dir,'src/lib.rs'),'pub fn first(v: &[u8], i: usize) -> u8 { origin_dep::lookup(v,i) }\npub fn second(v: &[u8], i: usize) -> u8 { origin_dep::lookup(v,i) }\npub fn local(v: &[u8], i: usize) -> u8 { v[i] }\n');
+  await writeFile(join(dir,'sniff-test.toml'),'# preserve config\n[panic]\ntrusted-boundary-namespaces=[]\n[safety]\nignored-namespaces=["untouched"]\n');
+  await launch();await page.goto(url);
+  await expect(page.locator('.status')).toHaveText('complete');
+  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('effect-source');
+  const granularity=page.getByRole('combobox',{name:'Granularity',exact:true});
+  await expect(granularity).toHaveValue('origin');
+  await granularity.selectOption('crate');
+  const dep=page.locator('.crate-section').filter({has:page.locator('.group-path',{hasText:/^origin_dep$/})});
+  await expect(dep).toHaveCount(1);
+  await expect(page.locator('.crate-section').first().locator('.group-path')).toHaveText('origin_dep');
+  await expect(dep.locator('.group-count').first()).toHaveText('2');
+  await dep.locator('.group').click();
+  await expect(dep.locator('.crate-origin')).toHaveCount(1);
+  await expect(dep.locator('.crate-origin .group-count')).toHaveText('2');
+  await expect(dep.locator('.crate-origin')).not.toContainText('audit_browser_fixture::first');
+  await dep.locator('.crate-origin').click();
+  await expect(page.locator('.filename')).toHaveText('dep/src/lib.rs');
+  await expect(page.locator('.cm-content')).toContainText('values[index]');
+  // Granularities keep separate expansion state.
+  await granularity.selectOption('origin');
+  await expect(page.locator('.finding-list .finding:visible')).toHaveCount(0);
+  await granularity.selectOption('crate');
+  await expect(dep.locator('.crate-origin')).toBeVisible();
+  await page.screenshot({path:join(repo,'target/audit-crate-origins.png'),fullPage:true});
+  await dep.getByRole('button',{name:'Trust origin_dep',exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await expect(dialog).toContainText('origin_dep::**');
+  await expect(dialog.getByRole('checkbox',{name:/panic/})).toBeChecked();
+  await dialog.getByRole('button',{name:'Trust',exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+  let config=await readFile(join(dir,'sniff-test.toml'),'utf8');
+  expect(config).toContain('"origin_dep::**"');
+  expect(config).toContain('# preserve config');
+  expect(config).toContain('ignored-namespaces=["untouched"]');
+  await expect(dep.locator('.group-count').first()).toHaveText('2');
+  await dep.getByRole('button',{name:'Trusted origin_dep',exact:true}).click();
+  await dialog.getByRole('button',{name:'Remove',exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+  config=await readFile(join(dir,'sniff-test.toml'),'utf8');expect(config).not.toContain('origin_dep::**');
+  await dep.getByRole('button',{name:'Trust origin_dep',exact:true}).click();
+  await dialog.getByRole('button',{name:'Trust',exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(dep.getByRole('button',{name:'Trusted origin_dep',exact:true})).toHaveClass(/completed/);
+  await page.screenshot({path:join(repo,'target/audit-crate-trusted.png'),fullPage:true});
+  await page.getByRole('button',{name:/Reanalyze/}).click();
+  await expect(dep).toHaveCount(0);
+  await expect(page.locator('.crate-section .group-path')).toHaveText('audit_browser_fixture');
+});
+
+
+test('crate granularity preselects the filtered effect and supports multi-effect trust',async({page})=>{
+  await stop();
+  await writeFile(join(dir,'src/lib.rs'),'pub fn lookup(v: &[u8], i: usize) -> u8 { v[i] }\npub unsafe fn raw(p: *const u8) -> u8 { unsafe { *p } }\n');
+  await writeFile(join(dir,'sniff-test.toml'),'[panic]\ntrusted-boundary-namespaces=[]\n[safety]\ntrusted-boundary-namespaces=[]\n');
+  await launch('panic',['safety']);await page.goto(url);
+  await expect(page.locator('.status')).toHaveText('complete');
+  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('effect-source');
+  await page.getByRole('combobox',{name:'Granularity',exact:true}).selectOption('crate');
+  await page.getByRole('combobox',{name:'Effect',exact:true}).selectOption('panic');
+  await page.getByRole('button',{name:'Trust audit_browser_fixture',exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await expect(dialog.getByRole('checkbox',{name:/panic/})).toBeChecked();
+  await expect(dialog.getByRole('checkbox',{name:/safety/})).not.toBeChecked();
+  await dialog.getByRole('button',{name:'Trust',exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+  let config=await readFile(join(dir,'sniff-test.toml'),'utf8');
+  expect(config.split('[safety]')[0]).toContain('audit_browser_fixture::**');
+  expect(config.split('[safety]')[1]).not.toContain('audit_browser_fixture::**');
+  await page.getByRole('combobox',{name:'Effect',exact:true}).selectOption('');
+  await page.getByRole('button',{name:'Trust audit_browser_fixture',exact:true}).click();
+  await expect(dialog.getByRole('checkbox',{name:/panic/})).toBeChecked();
+  await expect(dialog.getByRole('checkbox',{name:/safety/})).toBeChecked();
+  await dialog.getByRole('button',{name:'Trust',exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+  config=await readFile(join(dir,'sniff-test.toml'),'utf8');
+  expect(config.match(/audit_browser_fixture::\*\*/g)).toHaveLength(2);
 });

@@ -1,3 +1,4 @@
+use super::namespace_trust::{edit_namespace, namespace_matches, namespace_patterns, read_config};
 use super::*;
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,35 +124,13 @@ impl Session {
             .as_deref()
             .unwrap_or("")
             .parse::<toml_edit::Document>()?;
-        let patterns = config
+        let defaults = self
+            .default_ignored_namespaces
             .get(effect)
-            .and_then(|t| t.get("ignored-namespaces"))
-            .and_then(toml_edit::Item::as_array);
-        let trusted = if let Some(patterns) = patterns {
-            let mut builder = globset::GlobSetBuilder::new();
-            for pattern in patterns {
-                let pattern = pattern
-                    .as_str()
-                    .context("invalid ignored-namespaces entry")?;
-                builder.add(
-                    globset::GlobBuilder::new(&pattern.replace("::", "/"))
-                        .literal_separator(true)
-                        .build()?,
-                );
-                if let Some(root) = pattern.strip_suffix("::**") {
-                    builder.add(
-                        globset::GlobBuilder::new(&root.replace("::", "/"))
-                            .literal_separator(true)
-                            .build()?,
-                    );
-                }
-            }
-            builder
-                .build()?
-                .is_match(obligation.namespace.replace("::", "/"))
-        } else {
-            false
-        };
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let patterns = namespace_patterns(&config, effect, "ignored-namespaces", defaults)?;
+        let trusted = namespace_matches(&patterns, obligation.namespace)?;
         let declaration = reports
             .iter()
             .filter_map(|f| target(f)?.1.declaration)
@@ -226,65 +205,21 @@ impl Session {
             .as_deref()
             .unwrap_or("")
             .parse::<toml_edit::Document>()?;
-        if config.get(&detail.effect).is_none() {
-            config[&detail.effect] = toml_edit::Item::Table(toml_edit::Table::new());
-        }
-        ensure!(
-            config[&detail.effect].as_table_like().is_some(),
-            "effect configuration must be a table"
-        );
-        if config[&detail.effect].get("ignored-namespaces").is_none() {
-            let mut defaults = toml_edit::Array::new();
-            for pattern in self
-                .default_ignored_namespaces
-                .get(&detail.effect)
-                .into_iter()
-                .flatten()
-            {
-                defaults.push(pattern.as_str());
-            }
-            config[&detail.effect]["ignored-namespaces"] = toml_edit::value(defaults);
-        }
-        let patterns = config[&detail.effect]["ignored-namespaces"]
-            .as_array_mut()
-            .context("ignored-namespaces must be an array")?;
-        // Namespace display paths can contain glob metacharacters, e.g. array types.
-        let pattern = globset::escape(&detail.namespace);
-        if trusted {
-            if !patterns.iter().any(|p| p.as_str() == Some(&pattern)) {
-                patterns.push(pattern);
-            }
-        } else {
-            ensure!(
-                patterns.iter().any(|p| p.as_str() == Some(&pattern)),
-                "no exact trust entry exists for this function; refresh the obligation"
-            );
-            for index in (0..patterns.len()).rev() {
-                if patterns.get(index).and_then(toml_edit::Value::as_str) == Some(&pattern) {
-                    patterns.remove(index);
-                }
-            }
-        }
-        let content = config.to_string();
-        // Validate before writing; reject malformed effect tables without disturbing the file.
-        content.parse::<toml::Value>()?;
-        ensure!(
-            read_config(manifest)? == original,
-            "configuration changed; select the obligation again"
-        );
-        atomic_write(manifest, content.as_bytes())?;
-        self.analysis.override_revision += 1;
-        self.analysis.overrides_changed = true;
-        self.analysis.stale = true;
+        let defaults = self
+            .default_ignored_namespaces
+            .get(&detail.effect)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        edit_namespace(
+            &mut config,
+            &detail.effect,
+            "ignored-namespaces",
+            defaults,
+            &globset::escape(&detail.namespace),
+            trusted,
+        )?;
+        self.save_trust_config(manifest, original, config)?;
         self.obligation_detail(selected)
-    }
-}
-
-fn read_config(path: &Path) -> Result<Option<String>> {
-    match fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
     }
 }
 

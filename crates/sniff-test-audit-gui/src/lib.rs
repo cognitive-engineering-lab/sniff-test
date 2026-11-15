@@ -96,6 +96,8 @@ fn router(app: App) -> Router {
         .route("/obligation", get(obligation))
         .route("/obligation/trust", post(trust_obligation))
         .route("/obligation/untrust", post(untrust_obligation))
+        .route("/crate/trust", get(crate_trust).post(save_crate_trust))
+        .route("/crate/untrust", post(remove_crate_trust))
         .route("/group-items", get(group_items))
         .route("/buffer", get(buffer))
         .route("/source/save", post(save_source))
@@ -254,10 +256,19 @@ enum GroupBy {
     EffectSource,
     Obligation,
 }
+#[derive(Default, Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum Granularity {
+    #[default]
+    Origin,
+    Crate,
+}
 #[derive(Default, Deserialize)]
 struct Filter {
     #[serde(default)]
     group_by: GroupBy,
+    #[serde(default)]
+    granularity: Granularity,
     headers_only: Option<bool>,
     group_key: Option<String>,
     q: Option<String>,
@@ -274,6 +285,7 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
     let grouped = filter.grouped == Some(true) || inverted || filter.group_key.is_some();
     let cache_key = json!([
         filter.group_by,
+        filter.granularity,
         filter.q.as_deref().unwrap_or_default(),
         filter.effect.as_deref().unwrap_or_default(),
         filter.level.as_deref().unwrap_or_default(),
@@ -311,7 +323,13 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
                             .trusted
                     );
                 }
-                annotate_group_progress(group, &session);
+                if filter.group_by == GroupBy::EffectSource
+                    && filter.granularity == Granularity::Crate
+                {
+                    annotate_crate_trust(group, &session)?;
+                } else {
+                    annotate_group_progress(group, &session);
+                }
             }
             list.progress_revision = (revision.1, revision.2);
         }
@@ -378,12 +396,21 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
             })
             .collect::<anyhow::Result<Vec<_>>>()?
         } else if inverted {
-            group_effect_sources(&matches, filter.q.as_deref().unwrap_or_default())
+            if filter.granularity == Granularity::Crate {
+                group_effect_crates(&matches, filter.q.as_deref().unwrap_or_default())
+            } else {
+                group_effect_sources(&matches, filter.q.as_deref().unwrap_or_default())
+            }
         } else {
             group_findings(values)
         };
         for group in &mut groups {
-            annotate_group_progress(group, &session);
+            if filter.group_by == GroupBy::EffectSource && filter.granularity == Granularity::Crate
+            {
+                annotate_crate_trust(group, &session)?;
+            } else {
+                annotate_group_progress(group, &session);
+            }
         }
         let total = groups
             .iter()
@@ -444,7 +471,7 @@ fn list_response(
             .cloned()
             .collect();
         return Ok(Json(
-            json!({"items":items,"total":group["count"],"results_revision":revision}),
+            json!({"items":items,"total":group["item_count"].as_u64().unwrap_or_else(|| group["count"].as_u64().unwrap()),"results_revision":revision}),
         ));
     }
     let groups: Vec<_> = list
@@ -559,6 +586,7 @@ fn group_effect_sources(
         }
         Some(json!({
             "key":serde_json::to_string(source).unwrap(),"label":label,"path":path,
+            "description":description,"location_label":format!("{path}:{position}"),
             "count":reports.len(),
             "items":reports.iter().map(|f| finding_summary(f)).collect::<Vec<_>>()
         }))
@@ -579,11 +607,63 @@ fn group_effect_sources(
         label.to_lowercase().contains(query).then(|| {
             json!({
                 "key":format!("finding:{}",finding.id),"label":label,"path":path,
+                "description":finding.class.as_deref().unwrap_or(&finding.kind),"location_label":path,
                 "count":1,"items":[finding_summary(finding)]
             })
         })
     });
     sources.chain(fallback).collect()
+}
+
+// Reuse the direct-source identity and ranking of the origin view.
+fn group_effect_crates(findings: &[&sniff_test_audit_bridge::Finding], query: &str) -> Vec<Value> {
+    use std::collections::BTreeMap;
+    let mut crates: BTreeMap<Option<&str>, Vec<&sniff_test_audit_bridge::Finding>> =
+        BTreeMap::new();
+    for &finding in findings {
+        crates
+            .entry(sniff_test_audit_bridge::source_crate(finding))
+            .or_default()
+            .push(finding);
+    }
+    let query_lower = query.to_lowercase();
+    let mut groups: Vec<_> = crates.into_iter().filter_map(|(name, findings)| {
+        let label = name.unwrap_or("Unknown crate");
+        let origins = group_effect_sources(&findings, if label.to_lowercase().contains(&query_lower) { "" } else { query });
+        if origins.is_empty() { return None; }
+        let mut effects = BTreeMap::<String, u64>::new();
+        let mut count = 0;
+        let items: Vec<_> = origins.into_iter().map(|origin| {
+            let n = origin["count"].as_u64().unwrap();
+            count += n;
+            for report in origin["items"].as_array().unwrap() {
+                if let Some(effect) = report["effect"].as_str() { *effects.entry(effect.into()).or_default() += 1; }
+            }
+            let first = &origin["items"][0];
+            json!({"id":first["id"],"key":origin["key"],"label":origin["label"],"description":origin["description"],"location_label":origin["location_label"],"path":origin["path"],"count":n,"effect":first["effect"]})
+        }).collect();
+        Some(json!({"key":serde_json::to_string(&name).unwrap(),"label":label,"crate_name":name,"count":count,"item_count":items.len(),"effects":effects,"items":items}))
+    }).collect();
+    groups.sort_by(|a, b| {
+        b["count"]
+            .as_u64()
+            .cmp(&a["count"].as_u64())
+            .then_with(|| a["label"].as_str().cmp(&b["label"].as_str()))
+    });
+    groups
+}
+
+fn annotate_crate_trust(group: &mut Value, session: &Session) -> anyhow::Result<()> {
+    if let Some(name) = group["crate_name"].as_str() {
+        let detail = session.crate_trust_detail(name)?;
+        group["trusted"] = json!(group["effects"].as_object().unwrap().keys().all(|effect| {
+            detail
+                .effects
+                .iter()
+                .any(|e| &e.effect == effect && e.trusted)
+        }));
+    }
+    Ok(())
 }
 
 // Preserve first-occurrence order while keeping each file complete.
@@ -649,6 +729,45 @@ async fn untrust_obligation(
         request.config_hash.as_deref(),
     )?;
     Ok(Json(json!({"obligation":detail,"status":status(&session)})))
+}
+#[derive(Deserialize)]
+struct CrateId {
+    crate_name: String,
+}
+async fn crate_trust(State(app): State<App>, Query(id): Query<CrateId>) -> ApiResult {
+    Ok(Json(
+        serde_json::to_value(
+            app.session
+                .lock()
+                .unwrap()
+                .crate_trust_detail(&id.crate_name)?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+#[derive(Deserialize)]
+struct TrustCrate {
+    crate_name: String,
+    effects: Vec<String>,
+    results_revision: u64,
+    config_hash: Option<String>,
+}
+async fn save_crate_trust(State(app): State<App>, Json(request): Json<TrustCrate>) -> ApiResult {
+    change_crate_trust(app, request, true)
+}
+async fn remove_crate_trust(State(app): State<App>, Json(request): Json<TrustCrate>) -> ApiResult {
+    change_crate_trust(app, request, false)
+}
+fn change_crate_trust(app: App, request: TrustCrate, trusted: bool) -> ApiResult {
+    let mut session = app.session.lock().unwrap();
+    let detail = session.set_crate_trust(
+        &request.crate_name,
+        &request.effects,
+        request.results_revision,
+        request.config_hash.as_deref(),
+        trusted,
+    )?;
+    Ok(Json(json!({"crate":detail,"status":status(&session)})))
 }
 async fn finding(State(app): State<App>, Query(id): Query<Id>) -> ApiResult {
     let session = app.session.lock().unwrap();
@@ -1004,6 +1123,58 @@ mod tests {
     }
 
     #[test]
+    fn crate_groups_rank_complete_sources_and_combine_versions_without_report_rows() {
+        let mut values = vec![
+            source_finding("a", 1, "app::one"),
+            source_finding("b", 1, "app::two"),
+            source_finding("c", 2, "app::three"),
+            source_finding("d", 3, "app::four"),
+            source_finding("e", 4, "app::five"),
+            source_finding("f", 5, "app::six"),
+        ];
+        for (i, f) in values.iter_mut().enumerate() {
+            let source = f.direct_source.as_mut().unwrap();
+            source.owner = Some((
+                1,
+                Some(
+                    if i < 3 {
+                        "dep"
+                    } else if i == 3 {
+                        "alpha"
+                    } else {
+                        "zeta"
+                    }
+                    .into(),
+                ),
+            ));
+            if i == 2 {
+                source.source.0 = "dep-v2.rs".into();
+            }
+        }
+        values[5].direct_source = None;
+        let refs = values.iter().collect::<Vec<_>>();
+        let groups = group_effect_crates(&refs, "");
+        assert_eq!(
+            groups
+                .iter()
+                .map(|g| g["label"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["dep", "Unknown crate", "alpha", "zeta"]
+        );
+        assert_eq!(groups[0]["count"], 3);
+        assert_eq!(groups[0]["item_count"], 2);
+        assert_eq!(groups[0]["effects"]["custom"], 3);
+        assert_eq!(groups[0]["items"][0]["count"], 2);
+        assert!(groups[0]["items"][0].get("items").is_none());
+        assert!(groups[0]["items"][0].get("reason").is_none());
+        assert_eq!(group_effect_crates(&refs, "DEP")[0], groups[0]);
+        let searched = group_effect_crates(&refs, "byte 1");
+        assert_eq!(searched.len(), 1);
+        assert_eq!(searched[0]["count"], 2);
+        assert!(group_effect_crates(&refs, "app::one").is_empty());
+    }
+
+    #[test]
     fn source_groups_rank_by_reports_then_roots_then_source_and_keep_all_reports() {
         let values = vec![
             source_finding("a1", 10, "caller_a"),
@@ -1214,6 +1385,91 @@ mod tests {
             .unwrap()
             .0;
         assert_eq!(root_search["total_groups"], 0);
+        {
+            let mut session = app.session.lock().unwrap();
+            session.analysis.results_revision += 1;
+            for (i, finding) in session.analysis.findings.iter_mut().enumerate() {
+                let source = finding.direct_source.as_mut().unwrap();
+                source.source.2 = if i == 1 { 0 } else { i as u64 };
+                source.source.3 = source.source.2 + 1;
+                source.owner = Some((
+                    1,
+                    Some(if i < 151 {
+                        "dep".into()
+                    } else {
+                        format!("crate{i}")
+                    }),
+                ));
+            }
+        }
+        let crate_filter = "group_by=effect-source&granularity=crate&headers_only=true";
+        let headers = findings(State(app.clone()), query(crate_filter))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        assert_eq!(headers["total"], 252);
+        assert_eq!(headers["total_groups"], 102);
+        assert_eq!(headers["groups"].as_array().unwrap().len(), 100);
+        assert_eq!(headers["groups"][0]["count"], 151);
+        assert_eq!(headers["groups"][0]["item_count"], 150);
+        assert!(headers["groups"][0].get("items").is_none());
+        let key = headers["groups"][0]["key"].as_str().unwrap();
+        let mut params = url::form_urlencoded::Serializer::new(String::new());
+        params
+            .append_pair("group_by", "effect-source")
+            .append_pair("granularity", "crate")
+            .append_pair("group_key", key)
+            .append_pair("offset", "100");
+        let rows = group_items(State(app.clone()), query(&params.finish()))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        assert_eq!(rows["total"], 150);
+        assert_eq!(rows["items"].as_array().unwrap().len(), 50);
+        assert!(rows["items"][0].get("reason").is_none());
+        let second = findings(
+            State(app.clone()),
+            query(&format!("{crate_filter}&offset=100")),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!(second["groups"].as_array().unwrap().len(), 2);
+        let filtered = findings(
+            State(app.clone()),
+            query(&format!(
+                "{crate_filter}&effect=panic&level=warn&class=concrete-operation"
+            )),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!(filtered["total_groups"], 1);
+        assert_eq!(filtered["groups"][0]["count"], 151);
+        {
+            let mut session = app.session.lock().unwrap();
+            let detail = session.crate_trust_detail("dep").unwrap();
+            session
+                .set_crate_trust(
+                    "dep",
+                    &["panic".into()],
+                    detail.results_revision,
+                    detail.config_hash.as_deref(),
+                    true,
+                )
+                .unwrap();
+        }
+        let refreshed = findings(State(app.clone()), query(crate_filter))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        assert_eq!(refreshed["groups"][0]["trusted"], true);
+        assert_eq!(refreshed["groups"][0]["count"], 151);
         let flat = findings(State(app), query("")).await.ok().unwrap().0;
         assert_eq!(flat["items"].as_array().unwrap().len(), 100);
         assert!(flat.get("groups").is_none());

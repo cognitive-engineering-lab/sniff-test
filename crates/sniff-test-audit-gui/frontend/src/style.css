@@ -69,7 +69,7 @@ main { overflow: hidden; }
 .modal-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; margin-top:18px; }
 
 
-.inline-prompt button.completed { background: #18583f; border-color: #4eaa80; color: #effff5; opacity: 1; }
+.inline-prompt button.completed, .crate-trust.completed { background: #18583f; border-color: #4eaa80; color: #effff5; opacity: 1; }
 
 .group { width:100%; align-items:center; text-align:left; background:transparent; border:1px solid transparent; font-size:11px; }
 .group-path { flex:1; min-width:0; overflow-wrap:anywhere; }
@@ -165,3 +165,13 @@ main { overflow: hidden; }
 .display-mode select:disabled { opacity:.45; cursor:default; }
 .obligation-fallback { padding:24px; overflow:auto; }
 .obligation-fallback h2 { font-size:16px; overflow-wrap:anywhere; }
+
+.crate-header { display:flex; flex-wrap:wrap; align-items:center; gap:2px 6px; padding-bottom:6px; }
+.crate-header .group { flex:1 1 150px; width:auto; }
+.crate-trust { margin-left:auto; font-size:10px; padding:4px 7px; }
+.crate-effects { border:1px solid #d8e1d9; border-radius:6px; padding:12px; }
+.crate-effects label { display:flex; align-items:center; gap:8px; margin:8px 0; }
+.crate-effects small { margin-left:auto; }
+
+.crate-header .group { min-width:0; }
+.crate-header .group-path { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

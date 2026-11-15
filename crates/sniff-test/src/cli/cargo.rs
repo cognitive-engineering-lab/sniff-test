@@ -144,6 +144,17 @@ fn run_audit(args: &SniffTestArgs) -> Result<ExitCode> {
             .map(|(effect, config)| (effect, config.ignored_namespaces().patterns().to_vec()))
             .collect(),
     );
+    session.set_default_boundary_namespaces(
+        sniff_test_effects::registered_effect_configs()
+            .into_iter()
+            .map(|(effect, config)| {
+                (
+                    effect,
+                    config.trusted_boundary_namespaces().patterns().to_vec(),
+                )
+            })
+            .collect(),
+    );
     sniff_test_audit_gui::serve(session)?;
     Ok(ExitCode::SUCCESS)
 }
