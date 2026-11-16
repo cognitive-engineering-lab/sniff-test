@@ -1,7 +1,7 @@
 import {syntaxTree} from '@codemirror/language';
 import {ChangeSet, Text, StateEffect, StateField} from '@codemirror/state';
 import {EditorView, keymap, Decoration, ViewPlugin, ViewUpdate} from '@codemirror/view';
-import type {Location, LocationLink, DefinitionParams} from 'vscode-languageserver-protocol';
+import type {Location, LocationLink, DefinitionParams, Hover, HoverParams} from 'vscode-languageserver-protocol';
 import {LSPClient, LSPPlugin, Workspace, WorkspaceFile} from '@codemirror/lsp-client';
 
 export function fileUri(path:string) { return 'file://'+path.split('/').map(encodeURIComponent).join('/'); }
@@ -202,6 +202,20 @@ export class Navigation {
   private fail(error:unknown){if(!this.stopped){this.status('Rust navigation unavailable: '+String(error));this.stop();}}
   stop(){this.revision++;for(const clear of this.onDisconnect)clear();this.definitions=new WeakMap();this.stopped=true;this.controller.abort();this.client.disconnect();}
   document(path:string,content:string){(this.client.workspace as AuditWorkspace).setDocument(path,content);this.client.sync();}
+  async hover(path:string,content:string,position:number):Promise<Hover|null>{
+    if(this.stopped)return null;
+    await this.client.initializing;
+    if(!this.client.connected || !this.client.serverCapabilities?.hoverProvider)return null;
+    this.document(path,content);
+    const revision=this.revision,uri=fileUri(path);
+    const file=this.client.workspace.getFile(uri);
+    if(!file || file.doc.toString()!==content)return null;
+    const line=file.doc.lineAt(position);
+    const result=await this.client.request<HoverParams,Hover|null>('textDocument/hover',{
+      textDocument:{uri},position:{line:line.number-1,character:position-line.from},
+    });
+    return revision===this.revision?result:null;
+  }
   lookupDefinition(view:EditorView,position:number):Promise<Definition|null>{
     const plugin=LSPPlugin.get(view);
     if(!plugin || !this.client.connected)return Promise.resolve(null);

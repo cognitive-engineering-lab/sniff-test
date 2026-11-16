@@ -11,6 +11,8 @@ import {Autosave, type SaveState} from './autosave';
 import {displaySourcePath} from './source-path';
 import {RustPrototype} from './rust-prototype';
 import {ObligationDocumentationPanel, type ObligationDocumentation} from './obligation-documentation';
+import {unwrapKind} from './unwrap-producer';
+import {UnwrapProducerPanel} from './unwrap-producer-panel';
 
 type CrateTrust = {crate_name:string;namespace:string;effects:{effect:string;count:number;trusted:boolean;exact:boolean}[];config_path:string;config_hash?:string;results_revision:number};
 type DisplayMode = 'file'|'effect-source'|'obligation';
@@ -30,7 +32,7 @@ function effectContextLabel(context:EffectContext) {
   const readable=(value:string)=>value.replace(/[-_]+/g,' ').replace(/^./,letter=>letter.toUpperCase());
   return [context.effect,context.operation||context.class].filter(Boolean).map(value=>readable(value!)).join(' · ');
 }
-type DocumentationEditor = {effect_source?:string|null;effect_context?:EffectContext;mode:'source'|'override'; finding?:string; line?:number; token:string; can_remove:boolean; saved_destination:string; document:string; obligation_documentation?:ObligationDocumentation; destination:string; destinations:{path:string;exists:boolean}[]; action:string};
+type DocumentationEditor = {producerFinding?:Finding;effect_source?:string|null;effect_context?:EffectContext;mode:'source'|'override'; finding?:string; line?:number; token:string; can_remove:boolean; saved_destination:string; document:string; obligation_documentation?:ObligationDocumentation; destination:string; destinations:{path:string;exists:boolean}[]; action:string};
 type SavedSource = {buffer:Buffer; edit:{start:number;end:number;text:string}};
 const acknowledgedSource=Annotation.define<boolean>();
 function savedSourceChanges(state:EditorState,saved:SavedSource) {
@@ -53,6 +55,13 @@ async function api(path:string, body?:unknown, signal?:AbortSignal) {
   const response = await fetch('/api/v1/'+path, {signal, method:body === undefined ? 'GET' : 'POST', headers:{'x-audit-token':token, 'Content-Type':'application/json'}, body:body === undefined ? undefined : JSON.stringify(body)});
   if (!response.ok) { const text = await response.text(); let error; try { error = JSON.parse(text).error; } catch {} throw Error(error || `Request failed (${response.status})`); }
   return response.json();
+}
+const readProducerSource=(path:string):Promise<Buffer>=>api('buffer?'+new URLSearchParams({path}));
+function PopupProducer({finding,navigation}:{finding?:Finding;navigation?:Navigation}) {
+  const audit=finding?.audit;
+  const kind=unwrapKind([audit?.obligation_documentation?.function,...(audit?.trace.map(step=>step.target)||[])]);
+  const source=destination(finding,'source');
+  return kind&&source?<UnwrapProducerPanel kind={kind} source={source} navigation={navigation} readSource={readProducerSource}/>:null;
 }
 class DocumentationPrompt extends WidgetType {
   constructor(readonly action:string, readonly run:()=>void, readonly override=false, readonly added="", readonly manual=false) { super(); }
@@ -606,16 +615,17 @@ function App() {
       const snapshot=saver.current!.snapshot!;
       const context=await api('source/editor',{id:finding.id,action:t.action,revision:snapshot.revision,generation:status.generation});
       setCreateFile(false);setConfirmRemoval(false);
-      setDocumentationEditor({...context,mode:'source',finding:finding.id,action:t.action,saved_destination:context.destination,destinations:[]});
+      setDocumentationEditor({...context,producerFinding:selectedRef.current?.id===finding.id?selectedRef.current:undefined,mode:'source',finding:finding.id,action:t.action,saved_destination:context.destination,destinations:[]});
       return;
     }
     const annotation=t.overrideIndex===undefined?undefined:buffer.saved_overrides[t.overrideIndex];
     if(!annotation&&!selected)throw Error('Select a finding before adding an override.');
+    const producerFinding=(!annotation || selected?.audit?.targets.some(target=>target.action===t.action&&sameSelector(target.selector,t.selector)))?selected:undefined;
     const request=annotation?{path:buffer.path,index:t.overrideIndex,revision:buffer.revision}:{id:selected?.id,action:t.action,revision:buffer.revision,generation:status.generation};
     const context=await api('override/editor',request);
     setCreateFile(false);setOverrideFilename('sniff-test-overrides.toml');
     setConfirmRemoval(false);
-    setDocumentationEditor({...context,mode:'override',saved_destination:context.destination,action:t.action});
+    setDocumentationEditor({...context,producerFinding:selectedRef.current?.id===producerFinding?.id?producerFinding:undefined,mode:'override',saved_destination:context.destination,action:t.action});
   }
   async function commitDocumentation(filename?:string) {
     if(!documentationEditor)return;
@@ -747,6 +757,7 @@ function App() {
       </section>
       {documentationEditor.obligation_documentation&&<ObligationDocumentationPanel documentation={documentationEditor.obligation_documentation}/>}
       {!documentationEditor.obligation_documentation&&documentationEditor.effect_context&&<p className="effect-class-label" aria-label="Effect class">{effectContextLabel(documentationEditor.effect_context)}</p>}
+      <PopupProducer key={documentationEditor.token} finding={selected?.id===documentationEditor.producerFinding?.id?documentationEditor.producerFinding:undefined} navigation={navigation}/>
       <textarea ref={placeCaretAtEnd} autoFocus disabled={busy} aria-label={documentationEditor.mode==='source'?'Source documentation':'Override documentation'} value={documentationEditor.document} onChange={e=>setDocumentationEditor({...documentationEditor,document:e.target.value})}/>
       {documentationEditor.mode==='override'&&<label className="override-destination">Override file{documentationEditor.destinations.length>1?<select aria-label="Override file" value={documentationEditor.destination} disabled={busy} onChange={e=>setDocumentationEditor({...documentationEditor,destination:e.target.value})}>{documentationEditor.destinations.map(d=><option key={d.path} value={d.path}>{displaySourcePath(d.path,root)}</option>)}</select>:<small>{displaySourcePath(documentationEditor.destination,root)}</small>}</label>}
       <div className="modal-actions">{documentationEditor.can_remove&&<button disabled={busy||status.running} onClick={()=>setConfirmRemoval(true)}>{documentationEditor.mode==='source'?(documentationEditor.action==='justification'?'Remove justification':'Remove obligation'):'Remove override'}</button>}<button disabled={busy} onClick={()=>setDocumentationEditor(undefined)}>Cancel</button><button className="primary" disabled={busy||status.running} onClick={()=>act(async()=>{if(documentationEditor.mode==='override'&&!documentationEditor.destinations.find(d=>d.path===documentationEditor.destination)?.exists){setCreateFile(true);return;}await commitDocumentation();})}>Save</button></div>

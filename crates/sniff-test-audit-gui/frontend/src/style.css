@@ -140,6 +140,7 @@ main { overflow: hidden; }
   font: 12px/1.6 ui-monospace, monospace;
 }
 .obligation-prototype:focus-visible { outline: 2px solid #25825c; outline-offset: -3px; }
+.producer-context .producer-title { font-size: 14px; }
 
 .override-destination{display:block;margin-top:12px;font-size:12px;overflow-wrap:anywhere}.override-destination small{display:block;margin-top:6px}.override-destination input{display:block;width:100%;margin-top:8px}
 

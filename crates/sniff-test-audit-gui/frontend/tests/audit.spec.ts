@@ -1,6 +1,6 @@
 import {test, expect} from '@playwright/test';
 import {spawn, ChildProcess} from 'node:child_process';
-import {mkdtemp, mkdir, writeFile, readFile, rm, copyFile} from 'node:fs/promises';
+import {mkdtemp, mkdir, writeFile, readFile, rm, copyFile, realpath} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {resolve, join} from 'node:path';
 const repo = resolve('../../..');
@@ -831,21 +831,27 @@ async function controlledNavigation(page:any){
     let stream:ReadableStreamDefaultController<Uint8Array>;
     const encoder=new TextEncoder();
     const send=(message:unknown)=>stream.enqueue(encoder.encode('data: '+JSON.stringify(message)+'\n\n'));
-    const control=(window as any).navigationTest={requests:0,empty:true,hold:false,pending:[] as any[],
+    const control=(window as any).navigationTest={requests:0,empty:true,hold:false,pending:[] as any[],hover:null as any,hoverHold:false,hoverRequests:[] as any[],
       status(quiescent:boolean){send({jsonrpc:'2.0',method:'experimental/serverStatus',params:{health:'ok',quiescent}});},
       release(){for(const message of this.pending)send(message);this.pending=[];},
+      disconnect(){stream.enqueue(encoder.encode('event: failure\ndata: test disconnected\n\n'));},
     };
     window.fetch=async(input,init)=>{
       const url=String(input);
       if(url.includes('/lsp/events?'))return new Response(new ReadableStream({start(controller){stream=controller;}}),{headers:{'Content-Type':'text/event-stream'}});
       if(!url.includes('/lsp/messages?'))return original(input,init);
       const message=JSON.parse(String(init?.body));
-      if(message.method==='initialize')send({jsonrpc:'2.0',id:message.id,result:{capabilities:{definitionProvider:true,textDocumentSync:2}}});
+      if(message.method==='initialize')send({jsonrpc:'2.0',id:message.id,result:{capabilities:{definitionProvider:true,hoverProvider:true,textDocumentSync:2}}});
       else if(message.method==='initialized')control.status(true);
       else if(message.method==='textDocument/definition'){
         control.requests++;
         const response={jsonrpc:'2.0',id:message.id,result:control.empty?null:{uri:message.params.textDocument.uri,range:{start:{line:3,character:7},end:{line:3,character:12}}}};
         if(control.hold)control.pending.push(response);else send(response);
+      }
+      else if(message.method==='textDocument/hover'){
+        control.hoverRequests.push(message.params);
+        const response={jsonrpc:'2.0',id:message.id,result:control.hover};
+        if(control.hoverHold)control.pending.push(response);else send(response);
       }
       return new Response('{}',{headers:{'Content-Type':'application/json'}});
     };
@@ -1817,6 +1823,107 @@ test('invert obligation combines Vec push instances and trusts its documented pa
   await page.getByRole('button',{name:'Reanalyze',exact:false}).click();
   await expect(push).toHaveCount(0);
   expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
+});
+
+for(const scenario of [
+  {kind:'Option',dependency:false,propagate:false},
+  {kind:'Result',dependency:false,propagate:true},
+  {kind:'Option',dependency:true,propagate:true},
+  {kind:'Result',dependency:true,propagate:false},
+])test(`unwrap ${scenario.kind} Producer in ${scenario.dependency?'override':'source'} ${scenario.propagate?'propagation':'justification'}`,async({page})=>{
+  const {kind,dependency,propagate}=scenario;
+  await stop();
+  const dependencyDir=dependency?await realpath(await mkdtemp(join(tmpdir(),'sniff-producer-doc-'))):undefined;
+  const source=`/// Loads a value.\n///\n/// # ${kind==='Result'?'Errors':'Returns'}\n/// Returns ${kind==='Result'?'Err':'None'} when the flag is false.\nfn fetch(flag: bool) -> ${kind==='Result'?'Result<u8, ()>':'Option<u8>'} {\n    if flag { ${kind==='Result'?'Ok(1)':'Some(1)'} } else { ${kind==='Result'?'Err(())':'None'} }\n}\npub fn entry(flag: bool) -> u8 {\n    fetch(flag).unwrap()\n}\n`;
+  try {
+    if(dependencyDir){
+      await mkdir(join(dependencyDir,'src'));
+      await writeFile(join(dependencyDir,'Cargo.toml'),'[package]\nname="producer-dep"\nversion="0.1.0"\nedition="2024"\n');
+      await writeFile(join(dir,'Cargo.toml'),`[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\nproducer-dep={path=${JSON.stringify(dependencyDir)}}\n`);
+      await writeFile(join(dir,'src/lib.rs'),'pub fn entry(flag: bool) -> u8 { producer_dep::entry(flag) }\n');
+    }
+    await writeFile(join(dependencyDir??dir,'src/lib.rs'),source);
+    await launch();
+    await page.goto(url);
+    await page.getByLabel('Finding class',{exact:true}).selectOption('documented-obligation');
+    await page.locator('.group').first().click();await page.locator('.finding').first().click();
+    await expect(page.locator('.navigation-status')).toContainText('Rust navigation ready',{timeout:30000});
+    const button=dependency?(propagate?'Propagate obligations via override':'Justify via override'):(propagate?'Propagate to callers':'Justify here');
+    await page.getByRole('button',{name:button,exact:true}).click();
+    const dialog=page.getByRole('dialog'),producer=dialog.getByRole('region',{name:kind+' Producer',exact:true});
+    await expect(producer).toBeVisible({timeout:30000});
+    if(kind==='Result')await expect(producer.getByRole('heading',{name:kind+' Producer',exact:true})).toHaveCount(0);
+    else await expect(producer.getByRole('heading',{name:kind+' Producer',exact:true})).toBeVisible();
+    if(kind==='Result')await expect(producer.getByLabel('Producer documentation',{exact:true})).not.toContainText('Loads a value.');
+    else await expect(producer.getByLabel('Producer documentation',{exact:true})).toContainText('Loads a value.');
+    await expect(producer.getByLabel('Producer documentation',{exact:true})).toContainText(`Returns ${kind==='Result'?'Err':'None'} when the flag is false.`);
+    const prototype=producer.getByLabel('Producer prototype',{exact:true});
+    await expect(prototype).toContainText(`fn fetch(flag: bool) -> ${kind}`);
+    await expect(prototype.locator('code span').first()).toHaveAttribute('class',/\S+/);
+    await expect(dialog.getByLabel('Obligation documentation',{exact:true})).toContainText(/Panics/);
+    const textarea=dialog.getByLabel(dependency?'Override documentation':'Source documentation',{exact:true});
+    await expect(textarea).toBeFocused();
+    const docBounds=await producer.getByLabel('Producer documentation',{exact:true}).boundingBox(),protoBounds=await prototype.boundingBox(),editBounds=await textarea.boundingBox();
+    expect(docBounds!.y+docBounds!.height).toBeLessThanOrEqual(protoBounds!.y+1);
+    expect(protoBounds!.y+protoBounds!.height).toBeLessThanOrEqual(editBounds!.y);
+    await page.screenshot({path:join(repo,`target/audit-unwrap-${kind.toLowerCase()}-${dependency?'override':'source'}.png`),fullPage:true});
+    await textarea.fill(propagate?'/// # Panics\n/// The flag must be true.':'// PANIC: The flag is true.');
+    await dialog.getByRole('button',{name:'Save',exact:true}).click();
+    if(dependency)await dialog.getByRole('button',{name:'Create & save',exact:true}).click();
+    await expect(dialog).not.toBeVisible();
+    await page.getByRole('button',{name:propagate?'Obligation propagated!':'Justified!',exact:true}).click();
+    if(kind==='Result')await expect(dialog.getByLabel('Producer documentation',{exact:true})).not.toContainText('Loads a value.');
+    else await expect(dialog.getByLabel('Producer documentation',{exact:true})).toContainText('Loads a value.');
+    await expect(dialog.getByLabel('Producer documentation',{exact:true})).toContainText(`Returns ${kind==='Result'?'Err':'None'} when the flag is false.`);
+    await expect(dialog.getByLabel('Producer prototype',{exact:true})).toContainText('fn fetch');
+  } finally {if(dependencyDir){await stop();await rm(dependencyDir,{recursive:true,force:true,maxRetries:5,retryDelay:100});}}
+});
+
+test('unwrap producer ignores closed popup responses and supports signature-only hover',async({page})=>{
+  await stop();
+  await writeFile(join(dir,'src/lib.rs'),'fn fetch(flag: bool) -> Option<u8> { if flag { Some(1) } else { None } }\npub fn entry(flag: bool) -> u8 {\n    fetch(flag).unwrap()\n}\n');
+  await launch();await controlledNavigation(page);await selectFinding(page);
+  await page.evaluate(()=>Object.assign((window as any).navigationTest,{hoverHold:true,hover:{contents:{kind:'markdown',value:'```rust\nfn fetch(flag: bool) -> Option<u8>\n```'}}}));
+  await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await expect(dialog.getByRole('status')).toContainText('Loading producer');
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  await page.evaluate(()=>{const c=(window as any).navigationTest;c.release();c.hoverHold=false;});
+  await expect(page.getByRole('region',{name:'Option Producer',exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  await expect(dialog.getByLabel('Producer documentation',{exact:true})).toHaveText('No producer documentation available.');
+  await expect(dialog.getByLabel('Producer prototype',{exact:true})).toContainText('fn fetch');
+  await expect(dialog.getByLabel('Source documentation',{exact:true})).toBeFocused();
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  await page.evaluate(()=>{(window as any).navigationTest.hover=null;});
+  await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).navigationTest.hoverRequests.length)).toBe(3);
+  await expect(dialog.getByRole('region',{name:'Option Producer',exact:true})).toHaveCount(0);
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  await page.route('**/api/v1/buffer?*',async route=>{
+    const response=await route.fetch(),buffer=await response.json();
+    await route.fulfill({response,json:{...buffer,hash:'changed-since-analysis'}});
+  });
+  await Promise.all([
+    page.waitForResponse(response=>response.url().includes('/api/v1/buffer?')),
+    page.getByRole('button',{name:'Justify here',exact:true}).click(),
+  ]);
+  await expect(dialog.getByRole('region',{name:'Option Producer',exact:true})).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as any).navigationTest.hoverRequests.length)).toBe(3);
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  await page.unroute('**/api/v1/buffer?*');
+  await page.setViewportSize({width:360,height:760});
+  await page.evaluate(()=>{(window as any).navigationTest.hover={contents:{kind:'markdown',value:'```rust\nfn fetch(flag: bool) -> Option<u8>\n```\n\n---\n\n'+('Returns None if the flag is false.\n\n'.repeat(40))}};});
+  await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  const docs=dialog.getByLabel('Producer documentation',{exact:true});
+  await expect(docs).toContainText('Returns None');
+  expect(await docs.evaluate(element=>element.scrollHeight>element.clientHeight)).toBe(true);
+  const bounds=await dialog.boundingBox();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(360);
+  await page.screenshot({path:join(repo,'target/audit-unwrap-option-narrow.png'),fullPage:true});
+  await page.evaluate(()=>{(window as any).navigationTest.disconnect();});
+  await expect(dialog.getByRole('region',{name:'Option Producer',exact:true})).toHaveCount(0);
+  await expect(dialog.getByLabel('Source documentation',{exact:true})).toBeFocused();
 });
 
 for(const dependency of [false,true])test(`${dependency?'override':'source'} propagation shows origin documentation before and after saving`,async({page})=>{

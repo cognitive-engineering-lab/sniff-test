@@ -28,6 +28,7 @@ pub async fn messages(
                 | "textDocument/didChange"
                 | "textDocument/didClose"
                 | "textDocument/definition"
+                | "textDocument/hover"
                 | "workspace/didChangeConfiguration"
         ) {
             return Err(anyhow::anyhow!("unsupported language server operation").into());
