@@ -291,6 +291,45 @@ function AuditMarks({progress,group=false}:{progress?:AuditProgress|GroupProgres
   </span>;
 }
 
+function SidebarFilters({effects,effect,level,kind,obligationMode,onChange}:{effects:string[];effect:string;level:string;kind:string;obligationMode:boolean;onChange:(effect:string,level:string,kind:string)=>void}) {
+  const [open,setOpen]=useState(false);
+  const container=useRef<HTMLDivElement>(null),trigger=useRef<HTMLButtonElement>(null),panel=useRef<HTMLDivElement>(null);
+  const count=Number(!!effect)+Number(!!level)+Number(!obligationMode&&!!kind);
+  useEffect(()=>{
+    if(!open)return;
+    const place=()=>{
+      if(!container.current||!trigger.current||!panel.current)return;
+      const bounds=trigger.current.getBoundingClientRect();
+      const top=Math.max(16,Math.min(bounds.bottom+6,window.innerHeight-120));
+      const width=Math.min(290,container.current.clientWidth,window.innerWidth-32);
+      Object.assign(panel.current.style,{top:`${top}px`,left:`${Math.max(16,Math.min(bounds.left,window.innerWidth-width-16))}px`,width:`${width}px`,maxHeight:`${window.innerHeight-top-16}px`});
+    };
+    place();
+    panel.current?.showPopover();
+    panel.current?.querySelector('select')?.focus();
+    const observer=new ResizeObserver(place);
+    if(container.current)observer.observe(container.current);
+    window.addEventListener('resize',place);
+    const dismiss=(event:PointerEvent)=>{if(!container.current?.contains(event.target as Node))setOpen(false);};
+    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.preventDefault();setOpen(false);trigger.current?.focus();}};
+    document.addEventListener('pointerdown',dismiss);
+    document.addEventListener('keydown',escape);
+    return ()=>{observer.disconnect();window.removeEventListener('resize',place);document.removeEventListener('pointerdown',dismiss);document.removeEventListener('keydown',escape);};
+  },[open]);
+  return <div className="sidebar-filters" ref={container} onBlur={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node))setOpen(false);}}>
+    <button ref={trigger} type="button" className={'filter-toggle'+(count?' active':'')} aria-label={count?`Filters, ${count} active`:'Filters'} aria-expanded={open} aria-haspopup="dialog" aria-controls="finding-filters" onClick={()=>setOpen(value=>!value)}>
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/><path d="M5 2v4M11 6v4M7 10v4"/></svg>
+      Filters{count>0&&<span className="filter-count" aria-hidden="true">{count}</span>}
+    </button>
+    {open&&<div className="filter-popover" ref={panel} id="finding-filters" popover="manual" role="dialog" aria-label="Finding filters">
+      <div className="filter-heading"><strong>Filters</strong><button type="button" disabled={!count} onClick={()=>{panel.current?.querySelector('select')?.focus();onChange('','','');}}>Reset</button></div>
+      <label>Effect<select aria-label="Effect" value={effect} onChange={event=>onChange(event.target.value,level,kind)}><option value="">All effects</option>{effects.map(value=><option key={value}>{value}</option>)}</select></label>
+      <label>Severity<select aria-label="Severity" value={level} onChange={event=>onChange(effect,event.target.value,kind)}><option value="">All levels</option><option value="warn">Warning</option><option value="deny">Error</option></select></label>
+      {!obligationMode&&<label>Finding class<select aria-label="Finding class" value={kind} onChange={event=>onChange(effect,level,event.target.value)}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(value=><option key={value}>{value}</option>)}</select></label>}
+    </div>}
+  </div>;
+}
+
 function App() {
   const [trustReview,setTrustReview]=useState<Obligation>();
   const [confirmUntrust,setConfirmUntrust]=useState(false);
@@ -695,17 +734,12 @@ function App() {
     <header><div className="brand"><b>sniff-test</b><span> / audit</span></div><span className="workspace" title={root}>{root}</span><span className={'status '+status.status}>{status.status}{status.stale?' · stale':status.overrides_changed?' · reanalysis needed':''}</span><button disabled={status.running||startingAnalysis||busy} onClick={()=>act(reanalyze)}>↻ Reanalyze</button></header>
     {error&&<div className="error" role="alert">{error}<button onClick={()=>setError('')}>Dismiss</button></div>}
     <div className="layout" style={{'--left-size':`${leftWidth}px`,'--right-size':`${rightWidth}px`} as React.CSSProperties}><div className="side-pane left-pane" id="findings-panel"><aside className="findings"><div className="section-title">FINDINGS <span>{total}</span></div>
-      <label className="display-mode"><strong>Display mode:</strong>
-        <select aria-label="Display mode" value={mode} disabled={!!documentationEditor} onChange={e=>{const next=e.target.value as DisplayMode;act(()=>changeMode(next));}}>
-          <option value="file">File</option>
-          <option value="effect-source">Effect</option>
-          <option value="obligation">Obligation</option>
-        </select>
-      </label>
-      {inverted&&<label className="display-mode"><strong>Granularity:</strong><select aria-label="Granularity" value={granularity} disabled={!!documentationEditor} onChange={e=>setGranularity(e.target.value as 'origin'|'crate')}><option value="origin">Origin</option><option value="crate">Crate</option></select></label>}
+      <div className="display-segments" role="group" aria-label="Display mode">
+        {([['file','File'],['effect-source','Effect'],['obligation','Obligation']] as const).map(([value,label])=><button key={value} type="button" aria-pressed={mode===value} disabled={!!documentationEditor} onClick={()=>act(()=>changeMode(value))}>{label}</button>)}
+      </div>
+      {inverted&&<div className="granularity-control"><span>Group by</span><div className="granularity-segments" role="group" aria-label="Granularity">{(['origin','crate'] as const).map(value=><button key={value} type="button" aria-pressed={granularity===value} disabled={!!documentationEditor} onClick={()=>setGranularity(value)}>{value==='origin'?'Origin':'Crate'}</button>)}</div></div>}
       <input aria-label={obligationMode?'Search obligations':inverted?'Search effect sources':'Search findings'} placeholder={obligationMode?'Search functions, obligations…':inverted?(crateMode?'Search crates or origins…':'Search effect sources…'):'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);resetPages();}}/>
-      <div className="filters"><select aria-label="Effect" value={effect} onChange={e=>{setEffect(e.target.value);resetPages();}}><option value="">All effects</option>{effects.map(e=><option key={e}>{e}</option>)}</select><select aria-label="Severity" value={level} onChange={e=>{setLevel(e.target.value);resetPages();}}><option value="">All levels</option><option>warn</option><option>deny</option></select></div>
-      {!obligationMode&&<select aria-label="Finding class" value={kind} onChange={e=>{setKind(e.target.value);resetPages();}}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>}
+      <SidebarFilters effects={effects} effect={effect} level={level} kind={kind} obligationMode={obligationMode} onChange={(nextEffect,nextLevel,nextKind)=>{setEffect(nextEffect);setLevel(nextLevel);setKind(nextKind);resetPages();}}/>
       <div className={'finding-list'+(listVisible&&groups.length?' has-rows':'')} ref={listElement} aria-busy={listLoading||listResult!==listKey} onScroll={e=>{if(listVisible)listScroll.current[modeIndex]=e.currentTarget.scrollTop;}}>{!listVisible&&(listLoading||listResult!==listKey)&&<div className="loading" role="status">Loading {obligationMode?'obligations':inverted?'effect sources':'files'}…</div>}{(listVisible?groups:[]).map(({key, label,path:sourcePath,items:rows,count,progress,trusted,loading,loadError,crate_name,item_count,effects:groupEffects},index)=>{
         const path=label||key;
         if(crateMode){

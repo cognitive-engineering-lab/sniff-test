@@ -73,10 +73,66 @@ for(const [kind,dependency,display] of [
   await page.locator('.trace button').first().click();
   await expect(page.locator('.filename')).toHaveText(display);
   expect(requestedPath).toBe(dependency);
-  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('effect-source');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Effect',exact:true}).click();
   await expect(page.locator('.group-path')).toContainText(`${display}:`);
   await expect(page.locator('.group-path')).not.toContainText('/home/example');
   await expect(page.locator('.group')).toHaveAttribute('title',new RegExp(dependency.replaceAll('.','\\.')));
+});
+
+async function selectSidebarFilter(page:any,name:string,value:string){
+  await page.getByRole('button',{name:/^Filters/}).click();
+  await page.getByRole('dialog',{name:'Finding filters',exact:true}).getByLabel(name,{exact:true}).selectOption(value);
+  await page.keyboard.press('Escape');
+}
+
+test('compact sidebar exposes view segments and dismissible filters with an active count',async({page})=>{
+  await page.goto(url);
+  await expect(page.locator('.status')).toHaveText('complete');
+  const modes=page.getByRole('group',{name:'Display mode',exact:true});
+  await expect(modes.getByRole('button')).toHaveText(['File','Effect','Obligation']);
+  await expect(modes.getByRole('button',{name:'File',exact:true})).toHaveAttribute('aria-pressed','true');
+  const filters=page.getByRole('button',{name:/^Filters/});
+  const panel=page.getByRole('dialog',{name:'Finding filters',exact:true});
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByRole('group',{name:'Granularity',exact:true})).toHaveCount(0);
+  await filters.click();
+  await expect(panel.getByLabel('Effect',{exact:true})).toBeFocused();
+  await panel.getByLabel('Effect',{exact:true}).selectOption('panic');
+  await panel.getByLabel('Severity',{exact:true}).selectOption('deny');
+  await expect(filters).toHaveAccessibleName('Filters, 2 active');
+  await expect(page.locator('.finding-list')).toContainText('No matching findings.');
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
+  await expect(filters).toBeFocused();
+  await filters.click();
+  await panel.getByRole('button',{name:'Reset',exact:true}).click();
+  await expect(filters).toHaveAccessibleName('Filters');
+  await expect(page.locator('.group')).toHaveCount(1);
+  await expect(panel.getByRole('button',{name:'Reset',exact:true})).toBeDisabled();
+  await page.setViewportSize({width:900,height:700});
+  await expect(panel).toBeVisible();
+  const popup=(await panel.boundingBox())!;
+  expect(popup.x).toBeGreaterThanOrEqual(0);
+  expect(popup.x+popup.width).toBeLessThanOrEqual(900);
+  expect(popup.y+popup.height).toBeLessThanOrEqual(700);
+  await page.screenshot({path:join(repo,'target/audit-sidebar-filters.png'),fullPage:true});
+  await page.setViewportSize({width:1440,height:960});
+  await page.getByRole('textbox',{name:'Search findings',exact:true}).click();
+  await expect(panel).toHaveCount(0);
+  await modes.getByRole('button',{name:'Effect',exact:true}).click();
+  const granularity=page.getByRole('group',{name:'Granularity',exact:true});
+  await expect(granularity.getByRole('button')).toHaveText(['Origin','Crate']);
+  await granularity.getByRole('button',{name:'Crate',exact:true}).click();
+  await expect(granularity.getByRole('button',{name:'Crate',exact:true})).toHaveAttribute('aria-pressed','true');
+  await modes.getByRole('button',{name:'Obligation',exact:true}).click();
+  await filters.click();
+  await expect(panel.getByLabel('Finding class',{exact:true})).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await modes.getByRole('button',{name:'File',exact:true}).click();
+  await page.locator('.group').first().click();
+  await page.locator('.finding').first().click();
+  await expect(page.locator('.cm-editor')).toBeVisible();
+  await page.screenshot({path:join(repo,'target/audit-compact-sidebar.png'),fullPage:true});
 });
 
 async function editDocumentation(page:any,heading:string,explanation:string){
@@ -189,7 +245,7 @@ test('left panel tracks partial mixed and filtered audit progress',async({page})
   await expect(page.locator('.group').getByLabel('Justification saved',{exact:true})).toBeVisible();
   await expect(page.locator('.group').getByLabel('Propagation saved',{exact:true})).toHaveCount(0);
   await page.getByLabel('Search findings',{exact:true}).fill('');
-  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('effect-source');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Effect',exact:true}).click();
   await expect(page.locator('.group')).toHaveCount(2);
   for(const mark of ['Justification saved','Propagation saved'])await expect(page.locator('.group').getByLabel(mark,{exact:true})).toBeVisible();
   await page.screenshot({path:join(repo,'target/audit-left-progress.png'),fullPage:true});
@@ -654,10 +710,10 @@ for(const stale of [false,true])test(`${stale?'stale ':''}call trace highlights 
   await expect.poll(()=>entries.evaluateAll(elements=>elements.map(element=>(element as HTMLLIElement).value))).toEqual(numbers);
   const originNumber=await origin.evaluate(element=>(element.parentElement as HTMLLIElement).value);
   const originRow=page.locator(`.trace li[value="${originNumber}"] button`);
-  const toggle=page.getByRole('combobox',{name:'Display mode',exact:true});
+  const toggle=page.getByRole('group',{name:'Display mode',exact:true});
   const middle=page.getByLabel('Navigation and call trace');
   await middle.evaluate(element=>element.scrollTop=element.scrollHeight);
-  await toggle.selectOption('effect-source');
+  await toggle.getByRole('button',{name:'Effect',exact:true}).click();
   await expect(page.locator('.trace')).toHaveAttribute('reversed','');
   await expect(rows).toHaveText([...forward].reverse());
   await expect.poll(()=>entries.evaluateAll(elements=>elements.map(element=>(element as HTMLLIElement).value))).toEqual([...numbers].reverse());
@@ -668,7 +724,7 @@ for(const stale of [false,true])test(`${stale?'stale ':''}call trace highlights 
   await expect(page.locator('.filename')).toContainText('src/helper.rs');
   await expect(originRow).toHaveAttribute('aria-current','location');
   await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toContain('panic!');
-  await toggle.selectOption('file');
+  await toggle.getByRole('button',{name:'File',exact:true}).click();
   await expect(page.locator('.trace')).not.toHaveAttribute('reversed');
   await expect(rows).toHaveText(forward);
   await expect.poll(()=>entries.evaluateAll(elements=>elements.map(element=>(element as HTMLLIElement).value))).toEqual(numbers);
@@ -1000,7 +1056,7 @@ for(const kind of ['Option','Result'])test(`manual justification shows ${kind} u
   const source=`/// Loads a value.\n///\n/// # ${kind==='Result'?'Errors':'Returns'}\n/// Returns ${kind==='Result'?'Err':'None'} when the flag is false.\nfn fetch(flag: bool) -> ${kind==='Result'?'Result<u8, ()>':'Option<u8>'} {\n    if flag { ${kind==='Result'?'Ok(1)':'Some(1)'} } else { ${kind==='Result'?'Err(())':'None'} }\n}\npub fn entry(flag: bool) -> u8 {\n    let run = || fetch(flag).unwrap();\n    run()\n}\n`;
   await writeFile(join(dir,'src/lib.rs'),source);await launch();
   await page.goto(url);
-  await page.getByLabel('Finding class',{exact:true}).selectOption('documented-obligation');
+  await selectSidebarFilter(page,'Finding class','documented-obligation');
   await page.locator('.group').first().click();await page.locator('.finding').first().click();
   await expect(page.locator('.navigation-status')).toContainText('Rust navigation ready',{timeout:30000});
   await page.getByRole('button',{name:'Needs manual justification',exact:true}).click();
@@ -1190,10 +1246,10 @@ for(const action of ['Justify via override','Propagate obligations via override'
         }
         await page.keyboard.insertText('Typed at the end.');
         await expect(dialog.getByLabel('Override documentation')).toHaveValue(template+'Typed at the end.');
-        await expect(page.getByRole('combobox',{name:'Display mode',exact:true})).toBeDisabled();
+        await expect(page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Effect',exact:true})).toBeDisabled();
         await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
         await expect(page.locator('.draft')).toHaveCount(0);
-        await expect(page.getByRole('combobox',{name:'Display mode',exact:true})).toBeEnabled();
+        await expect(page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Effect',exact:true})).toBeEnabled();
         await page.getByRole('button',{name:action,exact:true}).click();
         await dialog.getByLabel('Override documentation').fill(explanation);
         if(existing)await dialog.getByLabel('Override file',{exact:true}).selectOption({index:1});
@@ -1234,9 +1290,9 @@ for(const action of ['Justify via override','Propagate obligations via override'
         const mark=action.startsWith('Justify')?'Justification saved':'Propagation saved';
         await expect(page.locator('.finding.selected').getByLabel(mark,{exact:true})).toBeVisible();
         await expect(page.locator('.group').getByLabel(mark,{exact:true})).toBeVisible();
-        await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('effect-source');
+        await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Effect',exact:true}).click();
         await expect(page.locator('.group').getByLabel(mark,{exact:true})).toBeVisible();
-        await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('file');
+        await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'File',exact:true}).click();
         await expect(page.getByRole('button',{name:alternative,exact:true})).toHaveCount(0);
         expect(await readFile(destination,'utf8')).toContain('The flag is checked by the caller.');
         expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
@@ -1404,10 +1460,10 @@ pub fn second_caller() { shared_source(); }
   await page.locator('.cm-content').click();await page.keyboard.press('ControlOrMeta+Home');
   await page.keyboard.insertText('// audit draft retained across grouping changes\n');
   await page.keyboard.press('ControlOrMeta+s');
-  const toggle=page.getByRole('combobox',{name:'Display mode',exact:true});
-  await expect(toggle).toHaveValue('file');
-  await expect(toggle.locator('option')).toHaveText(['File','Effect','Obligation']);
-  await toggle.selectOption('effect-source');await expect(toggle).toHaveValue('effect-source');
+  const toggle=page.getByRole('group',{name:'Display mode',exact:true});
+  await expect(toggle.getByRole('button',{name:'File',exact:true})).toHaveAttribute('aria-pressed','true');
+  await expect(toggle.getByRole('button')).toHaveText(['File','Effect','Obligation']);
+  await toggle.getByRole('button',{name:'Effect',exact:true}).click();await expect(toggle.getByRole('button',{name:'Effect',exact:true})).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('.group')).toHaveCount(2);
   const groups=page.locator('.finding-list > section');
   await expect(groups.first().locator('.group-count')).toHaveText('2');
@@ -1431,13 +1487,13 @@ pub fn second_caller() { shared_source(); }
   expect(await page.locator('.trace li').evaluateAll(elements=>elements.map(element=>(element as HTMLLIElement).value)))
     .toEqual(Array.from({length:traceLength},(_,i)=>traceLength-i));
   await expect(page.locator('.trace button').last()).toContainText('::second_caller');
-  await search.fill('');await toggle.selectOption('file');
-  await expect(toggle).toHaveValue('file');
+  await search.fill('');await toggle.getByRole('button',{name:'File',exact:true}).click();
+  await expect(toggle.getByRole('button',{name:'File',exact:true})).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('.group')).toHaveCount(1);
   await expect(page.locator('.finding')).toHaveCount(3);
   await expect(page.locator('.finding.selected strong')).toContainText('::second_caller');
   await expect(page.locator('.draft')).toHaveCount(0);
-  await toggle.selectOption('effect-source');await expect(page.locator('.group')).toHaveCount(2);
+  await toggle.getByRole('button',{name:'Effect',exact:true}).click();await expect(page.locator('.group')).toHaveCount(2);
   await expect(page.locator('.finding')).toHaveCount(2);
   await page.screenshot({path:join(repo,'target/audit-inverted-sources.png'),fullPage:true});
 });
@@ -1454,13 +1510,13 @@ for(const length of [0,1]) {
     const trace=page.locator('.trace'),entries=trace.locator('li');
     await expect(entries).toHaveCount(length);
     const forward=await entries.allTextContents();
-    const toggle=page.getByRole('combobox',{name:'Display mode',exact:true});
-    await toggle.selectOption('effect-source');
+    const toggle=page.getByRole('group',{name:'Display mode',exact:true});
+    await toggle.getByRole('button',{name:'Effect',exact:true}).click();
     await expect(trace).toHaveAttribute('reversed','');
     await expect(entries).toHaveCount(length);
     await expect(entries).toHaveText(forward);
     if(length)await expect(entries).toHaveAttribute('value','1');
-    await toggle.selectOption('file');
+    await toggle.getByRole('button',{name:'File',exact:true}).click();
     await expect(trace).not.toHaveAttribute('reversed');
     await expect(entries).toHaveText(forward);
   });
@@ -1529,7 +1585,7 @@ for (const mode of ['native','namespace override','source override','trait decla
       if(mode==='long contract')await page.setViewportSize({width:900,height:700});
       if(mode==='narrow layout')await page.setViewportSize({width:320,height:700});
       await page.goto(url);
-      await page.getByLabel('Finding class',{exact:true}).selectOption('documented-obligation');
+      await selectSidebarFilter(page,'Finding class','documented-obligation');
       await page.locator('.group').first().click();await page.locator('.finding').first().click();
       await page.getByRole('button',{name:'Justify via override',exact:true}).click();
       const dialog=page.getByRole('dialog'),context=dialog.getByRole('region',{name:'Obligation',exact:true});
@@ -1616,7 +1672,7 @@ for (const mode of ['native','namespace override','source override','trait decla
       await expect(dialog).not.toBeVisible();
       await expect(page.locator('.draft')).toHaveCount(0);
       await page.reload();await expect(page.locator('.status')).toHaveText('complete · reanalysis needed');
-      await page.getByLabel('Finding class',{exact:true}).selectOption('documented-obligation');
+      await selectSidebarFilter(page,'Finding class','documented-obligation');
       await page.locator('.group').first().click();await page.locator('.finding').first().click();
       await page.getByRole('button',{name:'Justified!',exact:true}).click();
       await expect(context).toBeVisible();
@@ -1654,25 +1710,25 @@ test('ordering views cache headers and remember pages expansion and scroll with 
   await expect(page.locator('.finding')).toHaveCount(151);
   expect(rows).toBe(2);
   await page.locator('.finding-list').evaluate(element=>{element.scrollTop=400;element.dispatchEvent(new Event('scroll'));});
-  const toggle=page.getByRole('combobox',{name:'Display mode',exact:true});
-  await toggle.selectOption('effect-source');
+  const toggle=page.getByRole('group',{name:'Display mode',exact:true});
+  await toggle.getByRole('button',{name:'Effect',exact:true}).click();
   await expect(page.locator('.group-path').first()).toHaveText('effect-source-0');
   await page.locator('.group').first().click();
   await expect(page.locator('.finding')).toHaveCount(100);
   const requests=lists;
-  await toggle.selectOption('file');
+  await toggle.getByRole('button',{name:'File',exact:true}).click();
   await expect(page.locator('.group-path').first()).toHaveText('file-100');
   await expect(page.locator('.finding')).toHaveCount(151);
   await expect.poll(()=>page.locator('.finding-list').evaluate(element=>element.scrollTop)).toBe(400);
   expect(lists).toBe(requests);
   expect(rows).toBe(3);
   await expect(page.locator('.effect-summary')).toBeVisible();
-  await toggle.selectOption('effect-source');
+  await toggle.getByRole('button',{name:'Effect',exact:true}).click();
   await expect(page.locator('.group-path').first()).toHaveText('effect-source-0');
   await expect(page.locator('.finding')).toHaveCount(100);
   expect(lists).toBe(requests);
   // Popup saves retain every loaded page while refreshed rows are fetched.
-  await toggle.selectOption('file');
+  await toggle.getByRole('button',{name:'File',exact:true}).click();
   await expect(page.locator('.finding')).toHaveCount(151);
   await page.getByRole('button',{name:'Justify here',exact:true}).click();
   const dialog=page.getByRole('dialog');
@@ -1704,13 +1760,13 @@ test('mode changes hide obsolete rows while loading and ignore delayed list resp
     if(params.get('group_by')==='effect-source')await gate;
     await route.fulfill({json:{total:1,total_groups:1,effects:['panic'],groups:[{key:params.get('group_by')==='effect-source'?'late-origin':'current-file',count:1}]}}).catch(()=>{});
   });
-  const toggle=page.getByRole('combobox',{name:'Display mode',exact:true});
-  await toggle.selectOption('effect-source');
+  const toggle=page.getByRole('group',{name:'Display mode',exact:true});
+  await toggle.getByRole('button',{name:'Effect',exact:true}).click();
   await expect(page.getByRole('status').filter({hasText:'Loading effect sources'})).toBeVisible();
   await expect(page.locator('.group')).toHaveCount(0);
-  await toggle.selectOption('file');
+  await toggle.getByRole('button',{name:'File',exact:true}).click();
   release();
-  await expect(toggle).toHaveValue('file');
+  await expect(toggle.getByRole('button',{name:'File',exact:true})).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('.group-path')).not.toHaveText('late-origin');
   await expect(page.locator('.cm-editor')).toBeVisible();
 });
@@ -1757,7 +1813,7 @@ test('failed mode requests leave the editor usable and can be retried',async({pa
     if(failures-- > 0){await route.fulfill({status:503,json:{error:'Temporary list failure'}});return;}
     await route.continue();
   });
-  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('effect-source');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Effect',exact:true}).click();
   await expect(page.getByRole('alert')).toContainText('Temporary list failure');
   await expect(page.locator('.finding-list')).toHaveAttribute('aria-busy','false');
   await expect(page.locator('.cm-editor')).toBeVisible();
@@ -1775,7 +1831,7 @@ pub fn caller_${i}() { contract_${String(i).padStart(2,'0')}(); }
 `).join('\n'));
   await launch();await page.goto(url);
   await expect(page.locator('.status')).not.toContainText('running');
-  await page.getByLabel('Display mode',{exact:true}).selectOption('obligation');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Obligation',exact:true}).click();
   const list=page.locator('.finding-list'),rows=page.locator('.obligation-row');
   await expect(rows).toHaveCount(35);
   await rows.nth(15).click();
@@ -1829,12 +1885,12 @@ test('invert obligation aggregates callsites and records effect-specific ignores
   await writeFile(join(dir,'sniff-test.toml'),'# preserve config comment\n[panic]\ntrusted-boundary-namespaces = []\n[safety]\nignored-namespaces = ["untouched"]\n');
   await launch();await page.goto(url);
   await expect(page.locator('.status')).not.toContainText('running');
-  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('effect-source');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Effect',exact:true}).click();
   await expect(page.locator('.group')).not.toHaveCount(0);
   const sources=await (await page.request.get(new URL('/api/v1/findings?group_by=effect-source&grouped=true',url).href,{headers:{'x-audit-token':new URL(url).hash.slice(1)}})).json();
   const sourceCounts:number[]=sources.groups.filter((group:any)=>JSON.parse(group.key).target?.includes('contracted')).map((group:any)=>group.count);
   expect(sourceCounts.length).toBeGreaterThanOrEqual(2);
-  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('obligation');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Obligation',exact:true}).click();
   const rows=page.locator('.obligation-row');
   await expect(rows).toHaveCount(2);
   await expect(rows.first()).toContainText('contracted');
@@ -1882,9 +1938,11 @@ test('invert obligation aggregates callsites and records effect-specific ignores
   await expect(page.locator('.status')).not.toContainText('running');
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText('other_contract');
-  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('file');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'File',exact:true}).click();
   await expect(page.locator('.group')).not.toHaveCount(0);
+  await page.getByRole('button',{name:/^Filters/}).click();
   await expect(page.getByLabel('Finding class',{exact:true})).toBeVisible();
+  await page.keyboard.press('Escape');
 });
 
 test('invert obligation keeps ignore available without verified source',async({page})=>{
@@ -1896,7 +1954,7 @@ test('invert obligation keeps ignore available without verified source',async({p
     await route.fulfill({response,json:{...detail,declaration:null}});
   });
   await page.goto(url);
-  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('obligation');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Obligation',exact:true}).click();
   await expect(page.locator('.obligation-row')).toHaveCount(1);
   await page.locator('.obligation-row').click();
   await expect(page.getByRole('region',{name:'Obligation documentation',exact:true})).toContainText('The input must be valid.');
@@ -1907,7 +1965,7 @@ test('invert obligation keeps ignore available without verified source',async({p
   await expect(page.getByRole('dialog',{name:'Obligation ignore',exact:true})).toHaveCount(0);
   await expect(page.locator('.obligation-row').getByRole('img',{name:'Obligations ignored'})).toBeVisible();
   await page.reload();
-  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('obligation');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Obligation',exact:true}).click();
   await expect(page.locator('.obligation-row').getByRole('img',{name:'Obligations ignored'})).toBeVisible();
   await page.locator('.obligation-row').click();
   await expect(page.getByRole('button',{name:'Ignored',exact:true})).toBeEnabled();
@@ -1931,7 +1989,7 @@ test('invert obligation combines Vec push instances and ignores its documented p
   await writeFile(join(dir,'src/lib.rs'),source);
   await writeFile(join(dir,'sniff-test.toml'),'[panic]\ntrusted-boundary-namespaces=["core", "alloc", "std"]\n');
   await launch();await page.goto(url);
-  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('obligation');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Obligation',exact:true}).click();
   const push=page.locator('.obligation-row').filter({hasText:'::push'});
   await expect(push).toHaveCount(1);
   await expect(push.locator('.group-count')).toHaveText('2');
@@ -1967,7 +2025,7 @@ for(const scenario of [
     await writeFile(join(dependencyDir??dir,'src/lib.rs'),source);
     await launch();
     await page.goto(url);
-    await page.getByLabel('Finding class',{exact:true}).selectOption('documented-obligation');
+    await selectSidebarFilter(page,'Finding class','documented-obligation');
     await page.locator('.group').first().click();await page.locator('.finding').first().click();
     await expect(page.locator('.navigation-status')).toContainText('Rust navigation ready',{timeout:30000});
     const button=dependency?(propagate?'Propagate obligations via override':'Justify via override'):(propagate?'Propagate to callers':'Justify here');
@@ -2115,8 +2173,8 @@ test('crate granularity refreshes aggregate and origin audit marks after saves a
   await writeFile(join(dir,'src/lib.rs'),'pub fn first(v: &[u8], i: usize) -> u8 { shared(v, i) }\npub fn second(v: &[u8], i: usize) -> u8 { shared(v, i) }\nfn shared(v: &[u8], i: usize) -> u8 {\n    v[i]\n}\npub fn untouched() {\n    panic!("intentional");\n}\n');
   await launch();await page.goto(url);
   await expect(page.locator('.status')).toHaveText('complete');
-  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('effect-source');
-  await page.getByRole('combobox',{name:'Granularity',exact:true}).selectOption('crate');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Effect',exact:true}).click();
+  await page.getByRole('group',{name:'Granularity',exact:true}).getByRole('button',{name:'Crate',exact:true}).click();
   const crate=page.locator('.crate-section'),header=crate.locator('.group');
   await header.click();
   const shared=crate.locator('.crate-origin').filter({has:page.locator('strong',{hasText:'::shared'})});
@@ -2162,8 +2220,8 @@ for(const action of ['Justify via override','Propagate obligations via override'
     await writeFile(join(dir,'Cargo.toml'),`[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\nprogress-dep={path=${JSON.stringify(dependency)}}\n`);
     await writeFile(join(dir,'src/lib.rs'),'pub fn entry(flag: bool) { progress_dep::risky(flag); }\n');
     await launch();await page.goto(url);await expect(page.locator('.status')).toHaveText('complete');
-    await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('effect-source');
-    await page.getByRole('combobox',{name:'Granularity',exact:true}).selectOption('crate');
+    await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Effect',exact:true}).click();
+    await page.getByRole('group',{name:'Granularity',exact:true}).getByRole('button',{name:'Crate',exact:true}).click();
     const crate=page.locator('.crate-section'),header=crate.locator('.group');
     await header.click();await crate.locator('.crate-origin').click();
     await page.getByRole('button',{name:action,exact:true}).click();
@@ -2191,10 +2249,10 @@ test('crate granularity shows count-only origins and saves boundary trust before
   await writeFile(join(dir,'sniff-test.toml'),'# preserve config\n[panic]\ntrusted-boundary-namespaces=[]\n[safety]\nignored-namespaces=["untouched"]\n');
   await launch();await page.goto(url);
   await expect(page.locator('.status')).toHaveText('complete');
-  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('effect-source');
-  const granularity=page.getByRole('combobox',{name:'Granularity',exact:true});
-  await expect(granularity).toHaveValue('origin');
-  await granularity.selectOption('crate');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Effect',exact:true}).click();
+  const granularity=page.getByRole('group',{name:'Granularity',exact:true});
+  await expect(granularity.getByRole('button',{name:'Origin',exact:true})).toHaveAttribute('aria-pressed','true');
+  await granularity.getByRole('button',{name:'Crate',exact:true}).click();
   const dep=page.locator('.crate-section').filter({has:page.locator('.group-path',{hasText:/^origin_dep$/})});
   await expect(dep).toHaveCount(1);
   await expect(page.locator('.crate-section').first().locator('.group-path')).toHaveText('origin_dep');
@@ -2207,9 +2265,9 @@ test('crate granularity shows count-only origins and saves boundary trust before
   await expect(page.locator('.filename')).toHaveText('dep/src/lib.rs');
   await expect(page.locator('.cm-content')).toContainText('values[index]');
   // Granularities keep separate expansion state.
-  await granularity.selectOption('origin');
+  await granularity.getByRole('button',{name:'Origin',exact:true}).click();
   await expect(page.locator('.finding-list .finding:visible')).toHaveCount(0);
-  await granularity.selectOption('crate');
+  await granularity.getByRole('button',{name:'Crate',exact:true}).click();
   await expect(dep.locator('.crate-origin')).toBeVisible();
   await page.screenshot({path:join(repo,'target/audit-crate-origins.png'),fullPage:true});
   await dep.getByRole('button',{name:'Trust origin_dep',exact:true}).click();
@@ -2262,9 +2320,9 @@ test('crate granularity preselects the filtered effect and supports multi-effect
   await writeFile(join(dir,'sniff-test.toml'),'[panic]\ntrusted-boundary-namespaces=[]\n[safety]\ntrusted-boundary-namespaces=[]\n');
   await launch('panic',['safety']);await page.goto(url);
   await expect(page.locator('.status')).toHaveText('complete');
-  await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('effect-source');
-  await page.getByRole('combobox',{name:'Granularity',exact:true}).selectOption('crate');
-  await page.getByRole('combobox',{name:'Effect',exact:true}).selectOption('panic');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Effect',exact:true}).click();
+  await page.getByRole('group',{name:'Granularity',exact:true}).getByRole('button',{name:'Crate',exact:true}).click();
+  await selectSidebarFilter(page,'Effect','panic');
   await page.getByRole('button',{name:'Trust audit_browser_fixture',exact:true}).click();
   const dialog=page.getByRole('dialog');
   await expect(dialog.getByRole('checkbox',{name:/panic/})).toBeChecked();
@@ -2275,7 +2333,7 @@ test('crate granularity preselects the filtered effect and supports multi-effect
   expect(config.split('[safety]')[0]).toContain('audit_browser_fixture::**');
   expect(config.split('[safety]')[1]).not.toContain('audit_browser_fixture::**');
   await expect(page.locator('.crate-header').getByLabel('Crate trusted',{exact:true})).toBeVisible();
-  await page.getByRole('combobox',{name:'Effect',exact:true}).selectOption('');
+  await selectSidebarFilter(page,'Effect','');
   await expect(page.locator('.crate-header').getByLabel('Crate trusted',{exact:true})).toHaveCount(0);
   await page.getByRole('button',{name:'Trust audit_browser_fixture',exact:true}).click();
   await expect(dialog.getByRole('checkbox',{name:/panic/})).toBeChecked();
@@ -2330,7 +2388,7 @@ test('obligation dropdown paginates all reports, retries reads, and retains expa
   await writeFile(join(dir,'src/lib.rs'),'/// # Panics\n/// Capacity must be available.\npub fn contracted() {}\n'+Array.from({length:105},(_,i)=>`pub fn caller_${i}() { contracted(); }`).join('\n'));
   await launch();await page.goto(url);
   await expect(page.locator('.status')).not.toContainText('running');
-  await page.getByLabel('Display mode',{exact:true}).selectOption('obligation');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Obligation',exact:true}).click();
   const header=page.locator('.obligation-row');
   await expect(header).toHaveCount(1);
   await expect(header.locator('.group-count')).toHaveText('105');
@@ -2352,8 +2410,8 @@ test('obligation dropdown paginates all reports, retries reads, and retains expa
   await expect(reports).toHaveCount(0);
   await header.click();
   await expect(reports).toHaveCount(105);
-  await page.getByLabel('Display mode',{exact:true}).selectOption('effect-source');
-  await page.getByLabel('Display mode',{exact:true}).selectOption('obligation');
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Effect',exact:true}).click();
+  await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Obligation',exact:true}).click();
   await expect(header).toHaveAttribute('aria-expanded','true');
   await expect(reports).toHaveCount(105);
   await page.getByRole('button',{name:'Reanalyze',exact:false}).click();
