@@ -1766,7 +1766,7 @@ test('failed mode requests leave the editor usable and can be retried',async({pa
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
-test('obligation trust refresh retains rows and scroll through delays failures and retry',async({page})=>{
+test('obligation ignore refresh retains rows and scroll through delays failures and retry',async({page})=>{
   await stop();
   await writeFile(join(dir,'src/lib.rs'),Array.from({length:35},(_,i)=>`/// # Panics
 /// Requirement ${i}.
@@ -1779,11 +1779,11 @@ pub fn caller_${i}() { contract_${String(i).padStart(2,'0')}(); }
   const list=page.locator('.finding-list'),rows=page.locator('.obligation-row');
   await expect(rows).toHaveCount(35);
   await rows.nth(15).click();
-  await expect(page.getByRole('button',{name:'Trust this function',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Ignore Obligations',exact:true})).toBeVisible();
   for(const remove of [false,true]){
-    await page.getByRole('button',{name:remove?'Trusted':'Trust this function',exact:true}).click();
-    const dialog=page.getByRole('dialog',{name:'Function trust',exact:true});
-    if(remove)await dialog.getByRole('button',{name:'Cancel trust',exact:true}).click();
+    await page.getByRole('button',{name:remove?'Ignored':'Ignore Obligations',exact:true}).click();
+    const dialog=page.getByRole('dialog',{name:'Obligation ignore',exact:true});
+    if(remove)await dialog.getByRole('button',{name:'Cancel ignore',exact:true}).click();
     await list.evaluate(element=>{element.scrollTop=300;element.dispatchEvent(new Event('scroll'));});
     const before=await list.evaluate(element=>{
       (window as any).retainedAuditRow=element.querySelector('.selected');
@@ -1797,7 +1797,7 @@ pub fn caller_${i}() { contract_${String(i).padStart(2,'0')}(); }
       if(remove)await route.fulfill({status:503,json:{error:'Refresh unavailable'}});
       else await route.fulfill({response});
     },{times:1});
-    await dialog.getByRole('button',{name:remove?'Confirm removal':'Trust this function',exact:true}).click();
+    await dialog.getByRole('button',{name:remove?'Confirm removal':'Ignore Obligations',exact:true}).click();
     await started;
     const assertStable=async()=>{
       await expect(rows).toHaveCount(35);
@@ -1818,11 +1818,11 @@ pub fn caller_${i}() { contract_${String(i).padStart(2,'0')}(); }
       await expect(list).toHaveAttribute('aria-busy','false');
       await assertStable();
     }
-    await expect(rows.nth(15).getByLabel('Function trusted',{exact:true})).toHaveCount(remove?0:1);
+    await expect(rows.nth(15).getByLabel('Obligations ignored',{exact:true})).toHaveCount(remove?0:1);
   }
 });
 
-test('invert obligation aggregates callsites and records effect-specific trust',async({page})=>{
+test('invert obligation aggregates callsites and records effect-specific ignores',async({page})=>{
   await stop();
   const source='/// # Panics\n/// Capacity must be available.\npub fn contracted() {}\n\n/// # Panics\n/// Other condition.\npub fn other_contract() {}\n\npub fn first() {\n    contracted();\n    other_contract();\n}\npub fn second() {\n    contracted();\n}\n';
   await writeFile(join(dir,'src/lib.rs'),source);
@@ -1847,7 +1847,7 @@ test('invert obligation aggregates callsites and records effect-specific trust',
   await rows.first().click();
   await expect(page.locator('.cm-editor')).toBeVisible();
   await expect(page.locator('.cm-content')).toContainText('Capacity must be available.');
-  await expect(page.getByRole('button',{name:'Trust this function',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Ignore Obligations',exact:true})).toBeVisible();
   await expect(page.getByRole('button',{name:'Justify here',exact:true})).toHaveCount(0);
   await expect(page.getByRole('button',{name:'Propagate to callers',exact:true})).toHaveCount(0);
   await expect(page.locator('.trace')).toHaveCount(0);
@@ -1863,14 +1863,14 @@ test('invert obligation aggregates callsites and records effect-specific trust',
   await expect(page.getByRole('button',{name:'Propagate to callers',exact:true})).toBeVisible();
   await rows.first().click();
   await expect(page.locator('.trace')).toHaveCount(0);
-  await expect(page.getByRole('button',{name:'Trust this function',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Ignore Obligations',exact:true})).toBeVisible();
   await rows.first().click();
   await page.screenshot({path:join(repo,'target/audit-invert-obligation.png'),fullPage:true});
-  await page.getByRole('button',{name:'Trust this function',exact:true}).click();
+  await page.getByRole('button',{name:'Ignore Obligations',exact:true}).click();
   expect(await readFile(join(dir,'sniff-test.toml'),'utf8')).not.toContain('audit_browser_fixture::contracted');
-  await page.getByRole('dialog',{name:'Function trust',exact:true}).getByRole('button',{name:'Trust this function',exact:true}).click();
-  await expect(page.getByRole('dialog',{name:'Function trust',exact:true})).toHaveCount(0);
-  await expect(page.getByRole('button',{name:'Trusted',exact:true})).toBeVisible();
+  await page.getByRole('dialog',{name:'Obligation ignore',exact:true}).getByRole('button',{name:'Ignore Obligations',exact:true}).click();
+  await expect(page.getByRole('dialog',{name:'Obligation ignore',exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Ignored',exact:true})).toBeVisible();
   const config=await readFile(join(dir,'sniff-test.toml'),'utf8');
   expect(config).toContain('# preserve config comment');
   expect(config).toContain('audit_browser_fixture::contracted');
@@ -1887,7 +1887,7 @@ test('invert obligation aggregates callsites and records effect-specific trust',
   await expect(page.getByLabel('Finding class',{exact:true})).toBeVisible();
 });
 
-test('invert obligation keeps trust available without verified source',async({page})=>{
+test('invert obligation keeps ignore available without verified source',async({page})=>{
   await stop();
   await writeFile(join(dir,'src/lib.rs'),'/// # Panics\n/// The input must be valid.\npub fn contracted() {}\npub fn root() { contracted(); }\n');
   await launch();
@@ -1901,31 +1901,31 @@ test('invert obligation keeps trust available without verified source',async({pa
   await page.locator('.obligation-row').click();
   await expect(page.getByRole('region',{name:'Obligation documentation',exact:true})).toContainText('The input must be valid.');
   await expect(page.getByLabel('Function prototype',{exact:true})).toContainText('contracted');
-  await expect(page.getByRole('button',{name:'Trust this function',exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'Trust this function',exact:true}).click();
-  await page.getByRole('dialog',{name:'Function trust',exact:true}).getByRole('button',{name:'Trust this function',exact:true}).click();
-  await expect(page.getByRole('dialog',{name:'Function trust',exact:true})).toHaveCount(0);
-  await expect(page.locator('.obligation-row').getByRole('img',{name:'Function trusted'})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Ignore Obligations',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Ignore Obligations',exact:true}).click();
+  await page.getByRole('dialog',{name:'Obligation ignore',exact:true}).getByRole('button',{name:'Ignore Obligations',exact:true}).click();
+  await expect(page.getByRole('dialog',{name:'Obligation ignore',exact:true})).toHaveCount(0);
+  await expect(page.locator('.obligation-row').getByRole('img',{name:'Obligations ignored'})).toBeVisible();
   await page.reload();
   await page.getByRole('combobox',{name:'Display mode',exact:true}).selectOption('obligation');
-  await expect(page.locator('.obligation-row').getByRole('img',{name:'Function trusted'})).toBeVisible();
+  await expect(page.locator('.obligation-row').getByRole('img',{name:'Obligations ignored'})).toBeVisible();
   await page.locator('.obligation-row').click();
-  await expect(page.getByRole('button',{name:'Trusted',exact:true})).toBeEnabled();
-  await page.getByRole('button',{name:'Trusted',exact:true}).click();
-  const dialog=page.getByRole('dialog',{name:'Function trust',exact:true});
+  await expect(page.getByRole('button',{name:'Ignored',exact:true})).toBeEnabled();
+  await page.getByRole('button',{name:'Ignored',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'Obligation ignore',exact:true});
   await expect(dialog.getByLabel('Function prototype',{exact:true})).toContainText('contracted');
-  await dialog.getByRole('button',{name:'Cancel trust',exact:true}).click();
+  await dialog.getByRole('button',{name:'Cancel ignore',exact:true}).click();
   await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
   expect(await readFile(join(dir,'sniff-test.toml'),'utf8')).toContain('audit_browser_fixture::contracted');
-  await dialog.getByRole('button',{name:'Cancel trust',exact:true}).click();
+  await dialog.getByRole('button',{name:'Cancel ignore',exact:true}).click();
   await dialog.getByRole('button',{name:'Confirm removal',exact:true}).click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole('button',{name:'Trust this function',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Ignore Obligations',exact:true})).toBeVisible();
   expect(await readFile(join(dir,'sniff-test.toml'),'utf8')).not.toContain('audit_browser_fixture::contracted');
-  await expect(page.locator('.obligation-row').getByRole('img',{name:'Function trusted'})).toHaveCount(0);
+  await expect(page.locator('.obligation-row').getByRole('img',{name:'Obligations ignored'})).toHaveCount(0);
 });
 
-test('invert obligation combines Vec push instances and trusts its documented panic obligation',async({page})=>{
+test('invert obligation combines Vec push instances and ignores its documented panic obligation',async({page})=>{
   await stop();
   const source='pub fn first(values: &mut Vec<u8>) { values.push(1); }\npub fn second(values: &mut Vec<u16>) { values.push(2); }\n';
   await writeFile(join(dir,'src/lib.rs'),source);
@@ -1936,11 +1936,11 @@ test('invert obligation combines Vec push instances and trusts its documented pa
   await expect(push).toHaveCount(1);
   await expect(push.locator('.group-count')).toHaveText('2');
   await push.click();
-  await expect(page.getByRole('button',{name:'Trust this function',exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'Trust this function',exact:true}).click();
-  await page.getByRole('dialog',{name:'Function trust',exact:true}).getByRole('button',{name:'Trust this function',exact:true}).click();
-  await expect(page.getByRole('dialog',{name:'Function trust',exact:true})).toHaveCount(0);
-  await expect(page.getByRole('button',{name:'Trusted',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Ignore Obligations',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Ignore Obligations',exact:true}).click();
+  await page.getByRole('dialog',{name:'Obligation ignore',exact:true}).getByRole('button',{name:'Ignore Obligations',exact:true}).click();
+  await expect(page.getByRole('dialog',{name:'Obligation ignore',exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Ignored',exact:true})).toBeVisible();
   expect(await readFile(join(dir,'sniff-test.toml'),'utf8')).toContain('::push');
   await page.getByRole('button',{name:'Reanalyze',exact:false}).click();
   await expect(push).toHaveCount(0);
