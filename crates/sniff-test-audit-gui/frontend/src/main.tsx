@@ -222,6 +222,7 @@ function Editor({trustPrompt, hideDocumentation=false, buffer, locked, reloadKey
     {manualMarker!==undefined&&<DocumentationPanel source title="Needs manual justification" step="manual" onClose={closeManualGuidance}>
       {finding?.audit?.obligation_documentation&&<ObligationDocumentationPanel documentation={finding.audit.obligation_documentation}/>}
       {!finding?.audit?.obligation_documentation&&finding?.audit?.effect_context&&<p className="effect-class-label" aria-label="Effect class">{effectContextLabel(finding.audit.effect_context)}</p>}
+      <PopupProducer key={finding?.id} finding={finding} navigation={navigation}/>
       <p>Add a <code>// {manualMarker}:</code> justification comment manually above this effect.</p>
       <div className="modal-actions"><button autoFocus onClick={closeManualGuidance}>Close</button></div>
     </DocumentationPanel>}

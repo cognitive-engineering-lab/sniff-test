@@ -995,6 +995,36 @@ test('inline closure manual justification guidance disappears during editing and
   await expect(page.locator('.finding-list')).toContainText('No matching findings.');
 });
 
+for(const kind of ['Option','Result'])test(`manual justification shows ${kind} unwrap producer documentation`,async({page})=>{
+  await stop();
+  const source=`/// Loads a value.\n///\n/// # ${kind==='Result'?'Errors':'Returns'}\n/// Returns ${kind==='Result'?'Err':'None'} when the flag is false.\nfn fetch(flag: bool) -> ${kind==='Result'?'Result<u8, ()>':'Option<u8>'} {\n    if flag { ${kind==='Result'?'Ok(1)':'Some(1)'} } else { ${kind==='Result'?'Err(())':'None'} }\n}\npub fn entry(flag: bool) -> u8 {\n    let run = || fetch(flag).unwrap();\n    run()\n}\n`;
+  await writeFile(join(dir,'src/lib.rs'),source);await launch();
+  await page.goto(url);
+  await page.getByLabel('Finding class',{exact:true}).selectOption('documented-obligation');
+  await page.locator('.group').first().click();await page.locator('.finding').first().click();
+  await expect(page.locator('.navigation-status')).toContainText('Rust navigation ready',{timeout:30000});
+  await page.getByRole('button',{name:'Needs manual justification',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'Needs manual justification',exact:true});
+  const producer=dialog.getByRole('region',{name:kind+' Producer',exact:true});
+  await dialog.getByRole('button',{name:'Close',exact:true}).focus();
+  await expect(producer.getByLabel('Producer documentation',{exact:true})).toContainText(`Returns ${kind==='Result'?'Err':'None'} when the flag is false.`,{timeout:30000});
+  if(kind==='Result'){
+    await expect(producer.getByRole('heading',{name:'Errors',exact:true})).toBeVisible();
+    await expect(producer.getByRole('heading',{name:kind+' Producer',exact:true})).toHaveCount(0);
+    await expect(producer.getByLabel('Producer documentation',{exact:true})).not.toContainText('Loads a value.');
+  } else {
+    await expect(producer.getByRole('heading',{name:kind+' Producer',exact:true})).toBeVisible();
+    await expect(producer.getByLabel('Producer documentation',{exact:true})).toContainText('Loads a value.');
+  }
+  await expect(producer.getByLabel('Producer prototype',{exact:true})).toContainText(`fn fetch(flag: bool) -> ${kind}`);
+  await expect(dialog.getByLabel('Obligation documentation',{exact:true})).toContainText('Panics');
+  await expect(dialog.getByRole('button',{name:'Close',exact:true})).toBeFocused();
+  await page.screenshot({path:join(repo,`target/audit-manual-unwrap-${kind.toLowerCase()}.png`),fullPage:true});
+  await dialog.getByRole('button',{name:'Close',exact:true}).click();
+  await expect(page.locator('.cm-content')).toBeFocused();
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
+});
+
 test('manual justification popup reuses styled obligation documentation and highlighted prototype',async({page})=>{
   await stop();
   const source='/// # Panics\n/// The `flag` must be **true**.\nfn danger(flag: bool) { assert!(flag); }\npub fn entry(flag: bool) {\n    let run = || danger(flag);\n    run();\n}\n';
