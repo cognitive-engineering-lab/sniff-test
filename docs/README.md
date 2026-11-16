@@ -570,7 +570,7 @@ message with `"reason":"sniff-test-artifact"`. Reports have no dependency
 workspace report. Reports use format version 25. Structured semantic facts may include
 optional `direct_source` metadata identifying a complete direct justification site;
 older format-25 reports without it remain readable. The audit GUI uses this identity
-for its **Invert effect** source groups, ranked by report count, distinct-root count,
+for its **Effect** source groups, ranked by report count, distinct-root count,
 and source order, matching `--sort`. In inverted mode, search hides whole sources
 without changing their report-count badges or filtering their child report roots.
 The toggle also reverses the displayed call trace while preserving step numbers.

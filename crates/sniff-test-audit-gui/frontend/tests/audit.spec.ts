@@ -1406,7 +1406,7 @@ pub fn second_caller() { shared_source(); }
   await page.keyboard.press('ControlOrMeta+s');
   const toggle=page.getByRole('combobox',{name:'Display mode',exact:true});
   await expect(toggle).toHaveValue('file');
-  await expect(toggle.locator('option')).toHaveText(['File','Invert effect','Invert obligation']);
+  await expect(toggle.locator('option')).toHaveText(['File','Effect','Obligation']);
   await toggle.selectOption('effect-source');await expect(toggle).toHaveValue('effect-source');
   await expect(page.locator('.group')).toHaveCount(2);
   const groups=page.locator('.finding-list > section');

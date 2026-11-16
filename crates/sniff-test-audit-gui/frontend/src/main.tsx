@@ -698,11 +698,11 @@ function App() {
       <label className="display-mode"><strong>Display mode:</strong>
         <select aria-label="Display mode" value={mode} disabled={!!documentationEditor} onChange={e=>{const next=e.target.value as DisplayMode;act(()=>changeMode(next));}}>
           <option value="file">File</option>
-          <option value="effect-source">Invert effect</option>
-          <option value="obligation">Invert obligation</option>
+          <option value="effect-source">Effect</option>
+          <option value="obligation">Obligation</option>
         </select>
       </label>
-      {inverted&&<label className="display-mode"><strong>Granularity:</strong><select aria-label="Granularity" value={granularity} disabled={!!documentationEditor} onChange={e=>setGranularity(e.target.value as 'origin'|'crate')}><option value="origin">Effect origin</option><option value="crate">Crate</option></select></label>}
+      {inverted&&<label className="display-mode"><strong>Granularity:</strong><select aria-label="Granularity" value={granularity} disabled={!!documentationEditor} onChange={e=>setGranularity(e.target.value as 'origin'|'crate')}><option value="origin">Origin</option><option value="crate">Crate</option></select></label>}
       <input aria-label={obligationMode?'Search obligations':inverted?'Search effect sources':'Search findings'} placeholder={obligationMode?'Search functions, obligations…':inverted?(crateMode?'Search crates or origins…':'Search effect sources…'):'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);resetPages();}}/>
       <div className="filters"><select aria-label="Effect" value={effect} onChange={e=>{setEffect(e.target.value);resetPages();}}><option value="">All effects</option>{effects.map(e=><option key={e}>{e}</option>)}</select><select aria-label="Severity" value={level} onChange={e=>{setLevel(e.target.value);resetPages();}}><option value="">All levels</option><option>warn</option><option>deny</option></select></div>
       {!obligationMode&&<select aria-label="Finding class" value={kind} onChange={e=>{setKind(e.target.value);resetPages();}}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>}
