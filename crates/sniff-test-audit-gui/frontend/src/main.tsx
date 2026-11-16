@@ -47,7 +47,7 @@ type Finding = {navigation?:FindingNavigation;id:string; crate_name:string; effe
 type AuditProgress = {justified:boolean;propagated:boolean};
 type GroupProgress = {handled:number;total:number;justified:number;propagated:number};
 type Summary = {description?:string;location_label?:string;label?:string;count?:number;progress?:AuditProgress|GroupProgress;id:string; crate_name:string; root:string; reason:string; level:string; effect:string; class:string; path?:string};
-type FindingGroup = {crate_name?:string;item_count?:number;effects?:Record<string,number>;trusted?:boolean;progress?:GroupProgress;key:string; label?:string; path?:string; count:number; items?:Summary[]; loading?:boolean; loadError?:string};
+type FindingGroup = {crate_name?:string;item_count?:number;effects?:Record<string,number>;trusted?:boolean;progress?:GroupProgress;key:string; label?:string; path?:string; count:number; items?:Summary[]; rowsRevision?:string; loading?:boolean; loadError?:string};
 type Status = {results_revision?:number;audit_revision?:number;override_revision?:number; override_error?:string; generation:number; running:boolean; stale:boolean; overrides_changed?:boolean; status:string; count:number; log:string};
 const token = location.hash.slice(1) || sessionStorage.getItem('audit-token') || '';
 if (token) { sessionStorage.setItem('audit-token', token); history.replaceState(null, '', location.pathname); }
@@ -318,10 +318,14 @@ function App() {
   const rowCache=useRef(new Map<string,Summary[]>());
   const rowReads=useRef(new Map<string,AbortController>());
   const [listLoading,setListLoading]=useState(false),[listFailure,setListFailure]=useState(''),[listRetry,setListRetry]=useState(0);
-  const [listResult,setListResult]=useState('');
+  const [listResult,setListResult]=useState(''),[listResultView,setListResultView]=useState('');
+  const groupsRef=useRef(groups);groupsRef.current=groups;
   const listRevision=JSON.stringify([status.results_revision,status.generation,status.running,status.audit_revision,status.override_revision]);
   const listFilter=JSON.stringify([query,effect,level,obligationMode?'':kind,mode,crateMode?'crate':'origin']);
+  // Metadata saves refresh the same view; only a different dataset or query hides its rows.
+  const listView=JSON.stringify([status.results_revision,status.generation,listFilter,page]);
   const listKey=JSON.stringify([listRevision,listFilter,page]);
+  const listVisible=listResultView===listView;
   const activeList=useRef(listKey);activeList.current=listKey;
   const filters=()=>({q:query,effect,level,class:obligationMode?'':kind,grouped:'true',group_by:mode,granularity:crateMode?'crate':'origin'});
   function cacheRows(key:string,rows:Summary[]){rowCache.current.delete(key);rowCache.current.set(key,rows);if(rowCache.current.size>32)rowCache.current.delete(rowCache.current.keys().next().value!);}
@@ -564,8 +568,12 @@ function App() {
       if(activeList.current!==listKey)return;
       const lastPage=Math.max(0,Math.ceil(value.total_groups/100)-1);
       if(page>lastPage){setPage(lastPage);return;}
-      setGroups(value.groups.map(group=>({...group,items:rowCache.current.get(rowsKey(group.key))||group.items})));
-      setTotal(value.total);setTotalGroups(value.total_groups);setEffects(value.effects);setListResult(listKey);setListLoading(false);
+      setGroups(value.groups.map(group=>{
+        const cachedRows=rowCache.current.get(rowsKey(group.key))||group.items;
+        const previous=listVisible?groupsRef.current.find(previous=>previous.key===group.key):undefined;
+        return {...group,items:cachedRows||previous?.items,rowsRevision:cachedRows?listRevision:previous?.rowsRevision};
+      }));
+      setTotal(value.total);setTotalGroups(value.total_groups);setEffects(value.effects);setListResultView(listView);setListResult(listKey);setListLoading(false);
     }
     if(cached){display(cached);return;}
     setListLoading(true);
@@ -574,34 +582,40 @@ function App() {
       listCache.current.set(listKey,value);
       if(listCache.current.size>16)listCache.current.delete(listCache.current.keys().next().value!);
       display(value);
-    }).catch(e=>{if(!controller.signal.aborted&&activeList.current===listKey){setGroups([]);setTotal(0);setTotalGroups(0);setListResult(listKey);setListFailure(String(e));setListLoading(false);}});
+    }).catch(e=>{if(!controller.signal.aborted&&activeList.current===listKey){if(!listVisible){setGroups([]);setTotal(0);setTotalGroups(0);}else setGroups(previous=>previous.map(group=>({...group,loading:false})));setListResultView(listView);setListResult(listKey);setListFailure(String(e));setListLoading(false);}});
     return ()=>controller.abort();
   },[listKey,listRetry]);
   useLayoutEffect(()=>{
-    if(listResult===listKey&&listElement.current)listElement.current.scrollTop=listScroll.current[modeIndex];
-  },[listKey,listResult,groups]);
+    if(listVisible&&listElement.current)listElement.current.scrollTop=listScroll.current[modeIndex];
+  },[listView,listResultView,groups]);
   useEffect(()=>()=>{for(const controller of rowReads.current.values())controller.abort();rowReads.current.clear();},[listKey]);
   async function loadRows(key:string,more=false){
     const requestKey=listKey,cacheKey=rowsKey(key);
     const current=groups.find(g=>g.key===key);
-    if(!current||current.loading||rowReads.current.has(key))return;
+    if(!current||current.loading||rowReads.current.has(key)||listResult!==listKey)return;
     const controller=new AbortController();rowReads.current.set(key,controller);
     const existing=more?(current.items||[]):[];
     setGroups(previous=>previous.map(g=>g.key===key?{...g,loading:true,loadError:undefined}:g));
     try{
-      const value=await api('group-items?'+new URLSearchParams({...filters(),group_key:key,offset:String(existing.length),limit:'100'}),undefined,controller.signal);
-      if(activeList.current!==requestKey)return;
-      const items=[...existing,...value.items];cacheRows(cacheKey,items);
-      setGroups(previous=>previous.map(g=>g.key===key?{...g,items,loading:false}:g));
+      const items=[...existing];
+      const target=more?existing.length+100:Math.max(100,current.items?.length||0);
+      do {
+        const value=await api('group-items?'+new URLSearchParams({...filters(),group_key:key,offset:String(items.length),limit:String(Math.min(100,target-items.length))}),undefined,controller.signal);
+        if(activeList.current!==requestKey)return;
+        items.push(...value.items);
+        if(!value.items.length||items.length>=value.total)break;
+      } while(items.length<target);
+      cacheRows(cacheKey,items);
+      setGroups(previous=>previous.map(g=>g.key===key?{...g,items,rowsRevision:listRevision,loading:false}:g));
     }catch(e){if(!controller.signal.aborted&&activeList.current===requestKey)setGroups(previous=>previous.map(g=>g.key===key?{...g,loading:false,loadError:String(e)}:g));}
     finally{if(rowReads.current.get(key)===controller)rowReads.current.delete(key);}
   }
   useEffect(()=>{
-    if(listResult!==listKey)return;
+    if(listResult!==listKey||listFailure)return;
     if(obligationMode)return;
     const open=crateMode?crateExpanded:inverted?sourceExpanded:expanded;
-    for(const group of groups)if(open.has(group.key)&&!group.items&&!group.loading&&!group.loadError)void loadRows(group.key);
-  },[groups,expanded,sourceExpanded,crateExpanded,listResult,listKey]);
+    for(const group of groups)if(open.has(group.key)&&(!group.items||group.rowsRevision!==listRevision)&&!group.loading&&!group.loadError)void loadRows(group.key);
+  },[groups,expanded,sourceExpanded,crateExpanded,listResult,listKey,listFailure]);
   useEffect(()=>{openSequence.current++;navigationRead.current?.abort();setOpening(false);setSelected(undefined);setObligation(undefined);},[status.generation,status.results_revision]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(saver.current?.pending||documentationEditor){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved,documentationEditor]);
   async function openDocumentation(t:Target) {
@@ -690,9 +704,9 @@ function App() {
       <input aria-label={obligationMode?'Search obligations':inverted?'Search effect sources':'Search findings'} placeholder={obligationMode?'Search functions, obligations…':inverted?(crateMode?'Search crates or origins…':'Search effect sources…'):'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);resetPages();}}/>
       <div className="filters"><select aria-label="Effect" value={effect} onChange={e=>{setEffect(e.target.value);resetPages();}}><option value="">All effects</option>{effects.map(e=><option key={e}>{e}</option>)}</select><select aria-label="Severity" value={level} onChange={e=>{setLevel(e.target.value);resetPages();}}><option value="">All levels</option><option>warn</option><option>deny</option></select></div>
       {!obligationMode&&<select aria-label="Finding class" value={kind} onChange={e=>{setKind(e.target.value);resetPages();}}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>}
-      <div className="finding-list" ref={listElement} aria-busy={listLoading||listResult!==listKey} onScroll={e=>{if(listResult===listKey)listScroll.current[modeIndex]=e.currentTarget.scrollTop;}}>{(listLoading||listResult!==listKey)&&<div className="loading" role="status">Loading {obligationMode?'obligations':inverted?'effect sources':'files'}…</div>}{(listResult===listKey?groups:[]).map(({key, label,path:sourcePath,items:rows,count,progress,trusted,loading,loadError,crate_name,item_count,effects:groupEffects},index)=>{
+      <div className={'finding-list'+(listVisible&&groups.length?' has-rows':'')} ref={listElement} aria-busy={listLoading||listResult!==listKey} onScroll={e=>{if(listVisible)listScroll.current[modeIndex]=e.currentTarget.scrollTop;}}>{!listVisible&&(listLoading||listResult!==listKey)&&<div className="loading" role="status">Loading {obligationMode?'obligations':inverted?'effect sources':'files'}…</div>}{(listVisible?groups:[]).map(({key, label,path:sourcePath,items:rows,count,progress,trusted,loading,loadError,crate_name,item_count,effects:groupEffects},index)=>{
         const path=label||key;
-        if(obligationMode)return <button type="button" className={'group obligation-row '+(obligation?.key===key?'selected':'')} key={key} onClick={()=>act(()=>chooseObligation({key,label,count}))}><span className="group-path">{label}</span>{trusted&&<span className="audit-progress"><span role="img" aria-label="Function trusted" title="Trust saved; reanalyze to update findings">✓</span></span>}<span className="group-count" aria-label={`${count} reports`}>{count}</span></button>;
+        if(obligationMode)return <button type="button" className={'group obligation-row '+(obligation?.key===key?'selected':'')} key={key} onClick={()=>act(()=>chooseObligation({key,label,count}))}><span className="group-path">{label}</span><span className="audit-progress obligation-trust">{trusted&&<span role="img" aria-label="Function trusted" title="Trust saved; reanalyze to update findings">✓</span>}</span><span className="group-count" aria-label={`${count} reports`}>{count}</span></button>;
         if(crateMode){
           const isOpen=crateExpanded.has(key),listId=`crate-origins-${index}`,originCount=item_count||0;
           return <section key={key} className="crate-section">
@@ -700,15 +714,15 @@ function App() {
               {crate_name&&<button className={'crate-trust'+(trusted?' completed':'')} disabled={busy||status.running||startingAnalysis} aria-label={`${trusted?'Trusted':'Trust'} ${crate_name}`} onClick={()=>act(()=>reviewCrate({key,count,crate_name,effects:groupEffects}))}>{trusted?'✓ Trusted':'Trust'}</button>}
             </div>
             <div id={listId} hidden={!isOpen}>{isOpen&&(rows||[]).map(item=><button type="button" className={'finding crate-origin '+(selected?.id===item.id?'selected':'')} title={item.label} key={item.id} onClick={()=>act(()=>choose(item,true))}><span className="finding-label"><span className="badge">{item.effect||item.class}</span><AuditMarks progress={item.progress} group/><span className="group-count" aria-label={`${item.count} reports`}>{item.count}</span></span><strong>{item.description}</strong><small>{item.path?item.location_label?.replace(item.path,()=>displaySourcePath(item.path!,root)):item.location_label}</small></button>)}
-              {isOpen&&loading&&<div className="loading" role="status">Loading origins…</div>}
+              {isOpen&&loading&&<div className={rows?.length?'refresh-status':'loading'} role="status">Loading origins…</div>}
               {isOpen&&loadError&&<div role="alert">{loadError}<button onClick={()=>void loadRows(key)}>Retry</button></div>}
               {isOpen&&rows&&rows.length<originCount&&<button className="load-more" disabled={loading} onClick={()=>void loadRows(key,true)}>Load more ({rows.length} of {originCount} origins)</button>}
             </div>
           </section>;
         }
         const isOpen=(inverted?sourceExpanded:expanded).has(key),listId=`${inverted?'source':'file'}-findings-${index}`;
-        return <section key={key}><button type="button" className="group" title={path} aria-expanded={isOpen} aria-controls={listId} onClick={()=>(inverted?setSourceExpanded:setExpanded)(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}><span className="group-chevron" aria-hidden="true">{isOpen?'▾':'▸'}</span><span className="group-path">{sourcePath?path.replace(sourcePath,()=>displaySourcePath(sourcePath,root)):displaySourcePath(path,root)}</span><AuditMarks progress={progress} group/><span className="group-count" aria-label={`${count} ${inverted?'reports':'effects'}`} >{count}</span></button><div id={listId} hidden={!isOpen}>{isOpen&&(rows||[]).map(item=><button className={'finding '+(selected?.id===item.id?'selected':'')} key={item.id} onClick={()=>act(()=>choose(item))}><span className="finding-label"><span className="badge">{item.effect||item.class}</span><AuditMarks progress={item.progress}/></span><strong>{item.root||item.crate_name}</strong><small>{item.reason}</small></button>)}{isOpen&&loading&&<div className="loading" role="status">Loading findings…</div>}{isOpen&&loadError&&<div role="alert">{loadError}<button onClick={()=>void loadRows(key)}>Retry</button></div>}{isOpen&&rows&&rows.length<count&&<button className="load-more" disabled={loading} onClick={()=>void loadRows(key,true)}>Load more ({rows.length} of {count})</button>}</div></section>;
-      })}{listResult===listKey&&listFailure&&<div role="alert">{listFailure}<button onClick={()=>setListRetry(value=>value+1)}>Retry findings</button></div>}{listResult===listKey&&!listLoading&&!listFailure&&!groups.length&&<div className="empty">{status.running?'Analyzing the workspace…':status.status==='complete'?'No matching findings.':'No findings available. Check analysis output.'}</div>}</div>
+        return <section key={key}><button type="button" className="group" title={path} aria-expanded={isOpen} aria-controls={listId} onClick={()=>(inverted?setSourceExpanded:setExpanded)(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}><span className="group-chevron" aria-hidden="true">{isOpen?'▾':'▸'}</span><span className="group-path">{sourcePath?path.replace(sourcePath,()=>displaySourcePath(sourcePath,root)):displaySourcePath(path,root)}</span><AuditMarks progress={progress} group/><span className="group-count" aria-label={`${count} ${inverted?'reports':'effects'}`} >{count}</span></button><div id={listId} hidden={!isOpen}>{isOpen&&(rows||[]).map(item=><button className={'finding '+(selected?.id===item.id?'selected':'')} key={item.id} onClick={()=>act(()=>choose(item))}><span className="finding-label"><span className="badge">{item.effect||item.class}</span><AuditMarks progress={item.progress}/></span><strong>{item.root||item.crate_name}</strong><small>{item.reason}</small></button>)}{isOpen&&loading&&<div className={rows?.length?'refresh-status':'loading'} role="status">Loading findings…</div>}{isOpen&&loadError&&<div role="alert">{loadError}<button onClick={()=>void loadRows(key)}>Retry</button></div>}{isOpen&&rows&&rows.length<count&&<button className="load-more" disabled={loading} onClick={()=>void loadRows(key,true)}>Load more ({rows.length} of {count})</button>}</div></section>;
+      })}{listResult===listKey&&listFailure&&<div className="list-refresh-error" role="alert">{listFailure}<button onClick={()=>setListRetry(value=>value+1)}>Retry findings</button></div>}{listResult===listKey&&!listLoading&&!listFailure&&!groups.length&&<div className="empty">{status.running?'Analyzing the workspace…':status.status==='complete'?'No matching findings.':'No findings available. Check analysis output.'}</div>}</div>
       <div className="pagination"><button aria-label={obligationMode?'Previous obligations':inverted?(crateMode?'Previous crates':'Previous effect sources'):'Previous files'} disabled={page===0} onClick={()=>setPage(p=>p-1)}>←</button><span>{obligationMode?'Obligations':inverted?(crateMode?'Crates':'Effect sources'):'Files'} · {page+1} / {Math.max(1,Math.ceil(totalGroups/100))}</span><button aria-label={obligationMode?'Next obligations':inverted?(crateMode?'Next crates':'Next effect sources'):'Next files'} disabled={(page+1)*100>=totalGroups} onClick={()=>setPage(p=>p+1)}>→</button></div>
     </aside><PanelDivider side="left" size={leftWidth} onResize={setLeftWidth}/></div>
     <main aria-busy={opening}><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];if(await open(previous,false))setNav(n=>n.slice(0,-1));})}>← Back</button><span className="filename" title={buffer?.path}>{buffer?displaySourcePath(buffer.path,root):'Source workspace'}</span>{opening&&<span className="navigation-loading" role="status">Opening source…</span>}{buffer?.writable&&<span className="save-status" role="status" aria-label="Source save status">{saveState.status==='failed'?'Save failed':saveState.status==='saving'?'Saving…':saveState.status==='pending'?'Unsaved changes':'Saved'}</span>}</div>

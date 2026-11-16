@@ -180,3 +180,9 @@ main { overflow: hidden; }
 .effect-source-context pre { margin: 0; padding: 0 16px 14px; max-height: min(20vh, 180px); overflow: auto; white-space: pre; font: 12px/1.6 ui-monospace, monospace; }
 .effect-source-context p { margin: 0; padding: 0 16px 14px; font-size: 12px; }
 .effect-source-context pre:focus-visible { outline: 2px solid #25825c; outline-offset: -3px; }
+
+/* Refresh feedback must not move the retained list or its scroll anchor. */
+.finding-list { position:relative; }
+.obligation-trust { width:13px; justify-content:center; }
+.refresh-status { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.finding-list.has-rows .list-refresh-error { position:sticky; bottom:0; background:#fff0df; padding:8px; font-size:11px; }

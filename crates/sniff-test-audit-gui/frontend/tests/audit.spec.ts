@@ -1641,6 +1641,28 @@ test('ordering views cache headers and remember pages expansion and scroll with 
   await expect(page.locator('.group-path').first()).toHaveText('effect-source-0');
   await expect(page.locator('.finding')).toHaveCount(100);
   expect(lists).toBe(requests);
+  // Popup saves retain every loaded page while refreshed rows are fetched.
+  await toggle.selectOption('file');
+  await expect(page.locator('.finding')).toHaveCount(151);
+  await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await dialog.getByLabel('Source documentation',{exact:true}).fill('// PANIC: Expected test panic.');
+  let entered!:()=>void,release!:()=>void;
+  const started=new Promise<void>(resolve=>entered=resolve),gate=new Promise<void>(resolve=>release=resolve);
+  await page.route('**/api/v1/group-items?*',async route=>{
+    entered();await gate;await route.fallback();
+  },{times:1});
+  await dialog.getByRole('button',{name:'Save',exact:true}).click();
+  await started;
+  try{
+    await expect(page.locator('.finding')).toHaveCount(151);
+    expect(await page.locator('.finding-list').evaluate(element=>element.scrollTop)).toBe(400);
+  }finally{release();}
+  await expect.poll(()=>rows).toBe(5);
+  await expect(page.locator('.refresh-status')).toHaveCount(0);
+  await expect(page.locator('.finding')).toHaveCount(151);
+  expect(await page.locator('.finding-list').evaluate(element=>element.scrollTop)).toBe(400);
+
 });
 
 test('mode changes hide obsolete rows while loading and ignore delayed list responses',async({page})=>{
@@ -1712,6 +1734,62 @@ test('failed mode requests leave the editor usable and can be retried',async({pa
   await page.getByRole('button',{name:'Retry findings',exact:true}).click();
   await expect(page.locator('.group')).toHaveCount(1);
   await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('obligation trust refresh retains rows and scroll through delays failures and retry',async({page})=>{
+  await stop();
+  await writeFile(join(dir,'src/lib.rs'),Array.from({length:35},(_,i)=>`/// # Panics
+/// Requirement ${i}.
+pub fn contract_${String(i).padStart(2,'0')}() {}
+pub fn caller_${i}() { contract_${String(i).padStart(2,'0')}(); }
+`).join('\n'));
+  await launch();await page.goto(url);
+  await expect(page.locator('.status')).not.toContainText('running');
+  await page.getByLabel('Display mode',{exact:true}).selectOption('obligation');
+  const list=page.locator('.finding-list'),rows=page.locator('.obligation-row');
+  await expect(rows).toHaveCount(35);
+  await rows.nth(15).click();
+  await expect(page.getByRole('button',{name:'Trust this function',exact:true})).toBeVisible();
+  for(const remove of [false,true]){
+    await page.getByRole('button',{name:remove?'Trusted':'Trust this function',exact:true}).click();
+    const dialog=page.getByRole('dialog',{name:'Function trust',exact:true});
+    if(remove)await dialog.getByRole('button',{name:'Cancel trust',exact:true}).click();
+    await list.evaluate(element=>{element.scrollTop=300;element.dispatchEvent(new Event('scroll'));});
+    const before=await list.evaluate(element=>{
+      (window as any).retainedAuditRow=element.querySelector('.selected');
+      return {scroll:element.scrollTop,y:element.querySelector('.selected')!.getBoundingClientRect().y};
+    });
+    expect(before.scroll).toBeGreaterThan(0);
+    let entered!:()=>void,release!:()=>void;
+    const started=new Promise<void>(resolve=>entered=resolve),gate=new Promise<void>(resolve=>release=resolve);
+    await page.route('**/api/v1/findings?*',async route=>{
+      const response=await route.fetch();entered();await gate;
+      if(remove)await route.fulfill({status:503,json:{error:'Refresh unavailable'}});
+      else await route.fulfill({response});
+    },{times:1});
+    await dialog.getByRole('button',{name:remove?'Confirm removal':'Trust this function',exact:true}).click();
+    await started;
+    const assertStable=async()=>{
+      await expect(rows).toHaveCount(35);
+      expect(await list.evaluate(element=>element.querySelector('.selected')===(window as any).retainedAuditRow)).toBe(true);
+      expect(await list.evaluate(element=>element.scrollTop)).toBe(before.scroll);
+      expect(await rows.nth(15).evaluate(element=>element.getBoundingClientRect().y)).toBe(before.y);
+    };
+    try{
+      await expect(list).toHaveAttribute('aria-busy','true');
+      await assertStable();
+    }finally{release();}
+    await expect(list).toHaveAttribute('aria-busy','false');
+    await assertStable();
+    if(remove){
+      await expect(list.getByRole('alert')).toContainText('Refresh unavailable');
+      await list.getByRole('button',{name:'Retry findings',exact:true}).click();
+      await expect(list.getByRole('alert')).toHaveCount(0);
+      await expect(list).toHaveAttribute('aria-busy','false');
+      await assertStable();
+    }
+    await expect(rows.nth(15).getByLabel('Function trusted',{exact:true})).toHaveCount(remove?0:1);
+  }
 });
 
 test('invert obligation aggregates callsites and records effect-specific trust',async({page})=>{
@@ -2094,7 +2172,22 @@ test('crate granularity shows count-only origins and saves boundary trust before
   const dialog=page.getByRole('dialog');
   await expect(dialog).toContainText('origin_dep::**');
   await expect(dialog.getByRole('checkbox',{name:/panic/})).toBeChecked();
+  let headersEntered!:()=>void,releaseHeaders!:()=>void,rowsEntered!:()=>void,releaseRows!:()=>void;
+  const headersStarted=new Promise<void>(resolve=>headersEntered=resolve),headersGate=new Promise<void>(resolve=>releaseHeaders=resolve);
+  const rowsStarted=new Promise<void>(resolve=>rowsEntered=resolve),rowsGate=new Promise<void>(resolve=>releaseRows=resolve);
+  await page.route('**/api/v1/findings?*',async route=>{
+    const response=await route.fetch();headersEntered();await headersGate;await route.fulfill({response});
+  },{times:1});
+  await page.route('**/api/v1/group-items?*',async route=>{
+    const response=await route.fetch();rowsEntered();await rowsGate;await route.fulfill({response});
+  },{times:1});
   await dialog.getByRole('button',{name:'Trust',exact:true}).click();
+  await headersStarted;
+  try{await expect(dep.locator('.crate-origin')).toHaveCount(1);}
+  finally{releaseHeaders();}
+  await rowsStarted;
+  try{await expect(dep.locator('.crate-origin')).toHaveCount(1);}
+  finally{releaseRows();}
   await expect(dialog).toHaveCount(0);
   await expect(dep.locator('.group').getByLabel('Crate trusted',{exact:true})).toBeVisible();
   await expect(dep.locator('.crate-origin .audit-progress')).toHaveCount(0);
