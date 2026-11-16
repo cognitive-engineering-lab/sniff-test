@@ -636,11 +636,8 @@ fn group_effect_sources(
         if !requirements.is_empty() {
             label.push_str(&format!(" · {}", requirements.join(", ")));
         }
-        let search = format!(
-            "{label} {} {}",
-            source.kind.2.as_deref().unwrap_or_default(),
-            source.target.as_deref().unwrap_or_default()
-        );
+        // Search the displayed origin and location, not hidden callee or contract metadata.
+        let search = format!("{description} {path}:{position}");
         if !search.to_lowercase().contains(query) {
             return None;
         }
@@ -664,7 +661,8 @@ fn group_effect_sources(
             finding.effect.as_deref().unwrap_or("Diagnostic"),
             finding.class.as_deref().unwrap_or(&finding.kind)
         );
-        label.to_lowercase().contains(query).then(|| {
+        let description = finding.class.as_deref().unwrap_or(&finding.kind);
+        format!("{description} {path}").to_lowercase().contains(query).then(|| {
             json!({
                 "key":format!("finding:{}",finding.id),"label":label,"path":path,
                 "description":finding.class.as_deref().unwrap_or(&finding.kind),"location_label":path,
@@ -1276,7 +1274,7 @@ mod tests {
         assert_eq!(groups[0]["items"][2]["id"], "c3");
         assert_eq!(group_effect_sources(&refs, "SHARED.RS"), groups);
         assert_eq!(group_effect_sources(&refs, "origin"), groups);
-        assert_eq!(group_effect_sources(&refs, "request"), groups);
+        assert!(group_effect_sources(&refs, "request").is_empty());
         assert!(group_effect_sources(&refs, "caller_c").is_empty());
         assert!(group_effect_sources(&refs, "reachable from").is_empty());
         assert_eq!(
@@ -1308,9 +1306,55 @@ mod tests {
         assert_eq!(groups.len(), 5);
         assert!(groups.iter().all(|g| g["count"] == 1));
         assert_eq!(groups[3]["items"][0]["id"], "d");
-        let filtered = group_effect_sources(&refs, "bounds");
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0]["items"][0]["id"], "b");
+        assert!(group_effect_sources(&refs, "bounds").is_empty());
+    }
+
+    #[test]
+    fn origin_search_matches_displayed_names_and_paths_without_hidden_metadata() {
+        let mut named = source_finding("named", 10, "caller");
+        named.direct_source.as_mut().unwrap().function = Some("dep::slice::split_at".into());
+        let mut duplicate = named.clone();
+        duplicate.id = "duplicate".into();
+        let mut hidden = source_finding("hidden", 20, "slice_caller");
+        let source = hidden.direct_source.as_mut().unwrap();
+        source.function = Some("dep::from_suffix_with_elems".into());
+        source.target = Some("core::slice::split_at".into());
+        source.kind.2 = Some("hidden_slice_operation".into());
+        source.requirements = vec!["slice requirement".into()];
+        source.missing_requirements = vec!["slice missing requirement".into()];
+        let mut path = source_finding("path", 30, "caller");
+        path.direct_source.as_mut().unwrap().source.0 = "src/slice.rs".into();
+        let mut visible_target = source_finding("visible_target", 40, "caller");
+        let source = visible_target.direct_source.as_mut().unwrap();
+        source.function = None;
+        source.target = Some("dep::slice_target".into());
+        let mut values = [named, duplicate, hidden, path, visible_target];
+        for finding in &mut values {
+            finding.direct_source.as_mut().unwrap().owner = Some((1, Some("dep".into())));
+        }
+        let refs = values.iter().collect::<Vec<_>>();
+        let matches = group_effect_sources(&refs, "SLICE");
+        assert_eq!(matches.len(), 3);
+        assert_eq!(
+            matches
+                .iter()
+                .map(|group| group["count"].as_u64().unwrap())
+                .sum::<u64>(),
+            4
+        );
+        assert!(matches.iter().all(|group| {
+            !group["description"]
+                .as_str()
+                .unwrap()
+                .contains("from_suffix")
+        }));
+        let crates = group_effect_crates(&refs, "slice");
+        assert_eq!(crates.len(), 1);
+        assert_eq!(crates[0]["item_count"], 3);
+        assert_eq!(crates[0]["count"], 4);
+        assert_eq!(group_effect_crates(&refs, "DEP")[0]["count"], 5);
+        assert!(group_effect_sources(&refs, "hidden_slice_operation").is_empty());
+        assert!(group_effect_sources(&refs, "slice missing requirement").is_empty());
     }
 
     #[test]

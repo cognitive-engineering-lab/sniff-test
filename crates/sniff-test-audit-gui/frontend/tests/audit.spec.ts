@@ -79,6 +79,15 @@ for(const [kind,dependency,display] of [
   await expect(page.locator('.group')).toHaveAttribute('title',new RegExp(dependency.replaceAll('.','\\.')));
 });
 
+async function showSidebarSearch(page:any){
+  const trigger=page.getByRole('button',{name:/^Search(?:, active)?$/});
+  if(await trigger.getAttribute('aria-expanded')!=='true')await trigger.click();
+}
+async function sidebarSearch(page:any,name:string){
+  await showSidebarSearch(page);
+  return page.getByRole('textbox',{name,exact:true});
+}
+
 async function selectSidebarFilter(page:any,name:string,value:string){
   await page.getByRole('button',{name:/^Filters/}).click();
   await page.getByRole('dialog',{name:'Finding filters',exact:true}).getByLabel(name,{exact:true}).selectOption(value);
@@ -117,7 +126,7 @@ test('compact sidebar exposes view segments and dismissible filters with an acti
   expect(popup.y+popup.height).toBeLessThanOrEqual(700);
   await page.screenshot({path:join(repo,'target/audit-sidebar-filters.png'),fullPage:true});
   await page.setViewportSize({width:1440,height:960});
-  await page.getByRole('textbox',{name:'Search findings',exact:true}).click();
+  await page.locator('.findings > .section-title').click();
   await expect(panel).toHaveCount(0);
   await modes.getByRole('button',{name:'Effect',exact:true}).click();
   const granularity=page.getByRole('group',{name:'Granularity',exact:true});
@@ -133,6 +142,62 @@ test('compact sidebar exposes view segments and dismissible filters with an acti
   await page.locator('.finding').first().click();
   await expect(page.locator('.cm-editor')).toBeVisible();
   await page.screenshot({path:join(repo,'target/audit-compact-sidebar.png'),fullPage:true});
+});
+
+test('sidebar search stays compact and preserves its query across dismissal and views',async({page})=>{
+  await page.goto(url);await expect(page.locator('.status')).toHaveText('complete');
+  const trigger=page.getByRole('button',{name:/^Search(?:, active)?$/});
+  const filters=page.getByRole('button',{name:/^Filters/});
+  const searchPanel=page.getByRole('dialog',{name:'Finding search',exact:true});
+  const filterPanel=page.getByRole('dialog',{name:'Finding filters',exact:true});
+  await expect(page.getByRole('textbox',{name:'Search findings',exact:true})).toHaveCount(0);
+  const list=await page.locator('.finding-list').boundingBox();
+  await trigger.click();
+  const input=searchPanel.getByRole('textbox',{name:'Search findings',exact:true});
+  await expect(input).toBeFocused();
+  expect(await page.locator('.finding-list').boundingBox()).toEqual(list);
+  await input.fill('no-such-function');
+  await expect(page.locator('.finding-list')).toContainText('No matching findings.');
+  await expect(trigger).toHaveAccessibleName('Search, active');
+  await page.keyboard.press('Escape');
+  await expect(searchPanel).toHaveCount(0);await expect(trigger).toBeFocused();
+  await expect(trigger).toHaveAccessibleName('Search, active');
+  await filters.click();await expect(filterPanel).toBeVisible();
+  await trigger.click();await expect(filterPanel).toHaveCount(0);
+  await expect(input).toHaveValue('no-such-function');
+  await filters.click();await expect(searchPanel).toHaveCount(0);
+  await page.keyboard.press('Escape');await expect(filters).toBeFocused();
+  const modes=page.getByRole('group',{name:'Display mode',exact:true});
+  for(const mode of ['Effect','Obligation','File']){
+    await modes.getByRole('button',{name:mode,exact:true}).click();
+    await trigger.click();
+    await expect(searchPanel.getByRole('textbox')).toHaveValue('no-such-function');
+    await page.keyboard.press('Escape');
+  }
+  await modes.getByRole('button',{name:'Effect',exact:true}).click();
+  await page.getByRole('group',{name:'Granularity',exact:true}).getByRole('button',{name:'Crate',exact:true}).click();
+  await trigger.click();await expect(searchPanel.getByRole('textbox')).toHaveAttribute('placeholder','Search crates or origins…');
+  await searchPanel.getByRole('button',{name:'Clear search',exact:true}).click();
+  await expect(searchPanel.getByRole('textbox')).toBeFocused();
+  await expect(searchPanel.getByRole('textbox')).toHaveValue('');
+  await expect(trigger).toHaveAccessibleName('Search');
+  await expect(page.locator('.crate-section')).toHaveCount(1);
+  await page.locator('.findings > .section-title').click();await expect(searchPanel).toHaveCount(0);
+  await trigger.click();await page.keyboard.press('Tab');await expect(searchPanel).toHaveCount(0);
+  await page.screenshot({path:join(repo,'target/audit-search-toolbar.png'),fullPage:true});
+});
+
+for(const viewport of [{width:900,height:700},{width:1440,height:480}])test(`sidebar search popover fits ${viewport.width}x${viewport.height}`,async({page})=>{
+  await page.setViewportSize(viewport);await page.goto(url);
+  await expect(page.locator('.status')).toHaveText('complete');
+  await showSidebarSearch(page);
+  const panel=page.getByRole('dialog',{name:'Finding search',exact:true});
+  const bounds=(await panel.boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(16);expect(bounds.x+bounds.width).toBeLessThanOrEqual(viewport.width-16);
+  expect(bounds.y+bounds.height).toBeLessThanOrEqual(viewport.height-16);
+  await panel.getByRole('textbox').fill('risky');
+  await expect(page.locator('.group')).toHaveCount(1);
+  await page.screenshot({path:join(repo,`target/audit-search-${viewport.width}.png`),fullPage:true});
 });
 
 async function editDocumentation(page:any,heading:string,explanation:string){
@@ -271,11 +336,11 @@ test('left panel tracks partial mixed and filtered audit progress',async({page})
   await expect(page.getByLabel('Source save status')).toHaveText('Saved');
   for(const mark of ['Justification saved','Propagation saved'])await expect(page.locator('.group').getByLabel(mark,{exact:true})).toBeVisible();
   await expect(page.locator('.finding').last().getByLabel('Propagation saved',{exact:true})).toBeVisible();
-  await page.getByLabel('Search findings',{exact:true}).fill('first');
+  await (await sidebarSearch(page,'Search findings')).fill('first');
   await expect(page.locator('.finding')).toHaveCount(1);
   await expect(page.locator('.group').getByLabel('Justification saved',{exact:true})).toBeVisible();
   await expect(page.locator('.group').getByLabel('Propagation saved',{exact:true})).toHaveCount(0);
-  await page.getByLabel('Search findings',{exact:true}).fill('');
+  await (await sidebarSearch(page,'Search findings')).fill('');
   await page.getByRole('group',{name:'Display mode',exact:true}).getByRole('button',{name:'Effect',exact:true}).click();
   await expect(page.locator('.group')).toHaveCount(2);
   for(const mark of ['Justification saved','Propagation saved'])await expect(page.locator('.group').getByLabel(mark,{exact:true})).toBeVisible();
@@ -650,17 +715,18 @@ test('saving a popup after navigation preserves the current file and cached sour
   const secondSource='pub fn second() {\n    panic!("second");\n}\n';
   await writeFile(join(dir,'src/lib.rs'),firstSource);await writeFile(join(dir,'src/other.rs'),secondSource);
   await launch();await page.goto(url);await expect(page.locator('.status')).not.toContainText('running');
+  await expect(page.locator('.group')).toHaveCount(2);
   for(const group of await page.locator('.group').all())await group.click();
   const first=page.locator('.finding').filter({has:page.locator('strong',{hasText:'::first'})});
   const second=page.locator('.finding').filter({has:page.locator('strong',{hasText:'::second'})});
   await first.click();await page.getByRole('button',{name:'Justify here',exact:true}).click();
-  const dialog=page.getByRole('dialog');await dialog.getByLabel('Source documentation',{exact:true}).fill('// PANIC: Expected first.');
+  const dialog=page.getByRole('dialog',{name:'Justify here',exact:true});await dialog.getByLabel('Source documentation',{exact:true}).fill('// PANIC: Expected first.');
   let release!:()=>void,entered!:()=>void;
   const gate=new Promise<void>(resolve=>release=resolve),started=new Promise<void>(resolve=>entered=resolve);
   await page.route('**/api/v1/source/commit',async route=>{const response=await route.fetch();entered();await gate;await route.fulfill({response});});
   await dialog.getByRole('button',{name:'Save',exact:true}).click();await started;
   await second.click();await expect(page.locator('.filename')).toHaveText('src/other.rs');
-  const search=page.getByLabel('Search findings',{exact:true});await search.focus();
+  const search=(await sidebarSearch(page,'Search findings'));await search.focus();
   release();await expect(dialog).toHaveCount(0);
   await expect(page.locator('.filename')).toHaveText('src/other.rs');await expect(search).toBeFocused();
   expect(await readFile(join(dir,'src/other.rs'),'utf8')).toBe(secondSource);
@@ -1465,11 +1531,11 @@ test('file groups start collapsed and retain independent expansion and selection
   await page.screenshot({path:join(repo,'target/audit-file-groups.png'),fullPage:true});
   await expect(page.locator('.filename')).toHaveText(filename!);
   await expect(page.getByLabel('Selected effect',{exact:true})).toBeVisible();
-  await page.getByLabel('Search findings',{exact:true}).fill('other.rs');
+  await (await sidebarSearch(page,'Search findings')).fill('other.rs');
   await expect(groups).toHaveCount(1);
   await expect(groups.first()).toHaveAttribute('aria-expanded','true');
   await expect(groups.first().locator('.group-count')).toHaveText('1');
-  await page.getByLabel('Search findings',{exact:true}).fill('no-such-file');
+  await (await sidebarSearch(page,'Search findings')).fill('no-such-file');
   await expect(page.getByText('No matching findings.',{exact:true})).toBeVisible();
 });
 
@@ -1502,13 +1568,13 @@ pub fn second_caller() { shared_source(); }
   await groups.first().locator('.group').click();
   await expect(groups.first().locator('.finding')).toHaveCount(2);
   await expect(page.locator('.finding.selected strong')).toContainText('::first_caller');
-  const search=page.getByRole('textbox',{name:'Search effect sources'});
-  await search.fill('shared_source');
+  const search=await sidebarSearch(page,'Search effect sources');
+  await showSidebarSearch(page);await search.fill('shared_source');
   await expect(page.locator('.group')).toHaveCount(1);
   await expect(page.locator('.group-count')).toHaveText('2');
   await expect(page.locator('.finding')).toHaveCount(2);
-  await search.fill('first_caller');await expect(page.locator('.group')).toHaveCount(0);
-  await search.fill('shared_source');
+  await showSidebarSearch(page);await search.fill('first_caller');await expect(page.locator('.group')).toHaveCount(0);
+  await showSidebarSearch(page);await search.fill('shared_source');
   await expect(page.locator('.group-count')).toHaveText('2');
   await page.locator('.finding').filter({has:page.locator('strong',{hasText:'::second_caller'})}).click();
   await expect(page.locator('.finding.selected strong')).toContainText('::second_caller');
@@ -1518,7 +1584,7 @@ pub fn second_caller() { shared_source(); }
   expect(await page.locator('.trace li').evaluateAll(elements=>elements.map(element=>(element as HTMLLIElement).value)))
     .toEqual(Array.from({length:traceLength},(_,i)=>traceLength-i));
   await expect(page.locator('.trace button').last()).toContainText('::second_caller');
-  await search.fill('');await toggle.getByRole('button',{name:'File',exact:true}).click();
+  await showSidebarSearch(page);await search.fill('');await toggle.getByRole('button',{name:'File',exact:true}).click();
   await expect(toggle.getByRole('button',{name:'File',exact:true})).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('.group')).toHaveCount(1);
   await expect(page.locator('.finding')).toHaveCount(3);
@@ -1730,7 +1796,7 @@ test('ordering views cache headers and remember pages expansion and scroll with 
     const offset=Number(new URL(route.request().url()).searchParams.get('offset'));
     await route.fulfill({json:{total:151,items:Array.from({length:Math.min(100,151-offset)},(_,i)=>({id:`row-${offset+i}`,crate_name:'fixture',root:`report ${offset+i}`,effect:'panic',reason:'test',level:'warn',class:'concrete-operation'}))}});
   });
-  await page.getByLabel('Search findings',{exact:true}).fill('cached');
+  await (await sidebarSearch(page,'Search findings')).fill('cached');
   await expect(page.locator('.group')).toHaveCount(100);
   expect(rows).toBe(0);
   await page.getByLabel('Next files',{exact:true}).click();
@@ -1928,9 +1994,10 @@ test('invert obligation aggregates callsites and records effect-specific ignores
   await expect(rows.first().locator('.group-count')).toHaveText(String(sourceCounts.reduce((a,b)=>a+b,0)));
   await expect(page.getByLabel('Finding class',{exact:true})).toHaveCount(0);
   const count=await rows.first().locator('.group-count').textContent();
-  await page.getByLabel('Search obligations',{exact:true}).fill('Capacity must');
+  await (await sidebarSearch(page,'Search obligations')).fill('Capacity must');
   await expect(rows).toHaveCount(1);
   await expect(rows.first().locator('.group-count')).toHaveText(count!);
+  await page.keyboard.press('Escape');
   await rows.first().click();
   await expect(page.locator('.cm-editor')).toBeVisible();
   await expect(page.locator('.cm-content')).toContainText('Capacity must be available.');
@@ -1964,7 +2031,7 @@ test('invert obligation aggregates callsites and records effect-specific ignores
   expect(config).toContain('core::ub_checks::assert_unsafe_precondition');
   expect(config).toContain('ignored-namespaces = ["untouched"]');
   expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
-  await page.getByLabel('Search obligations',{exact:true}).fill('');
+  await (await sidebarSearch(page,'Search obligations')).fill('');
   await page.getByRole('button',{name:'Reanalyze',exact:false}).click();
   await expect(page.locator('.status')).not.toContainText('running');
   await expect(rows).toHaveCount(1);
@@ -2228,11 +2295,11 @@ test('crate granularity refreshes aggregate and origin audit marks after saves a
   await dialog.getByRole('button',{name:'Save',exact:true}).click();
   for(const mark of ['Justification saved','Propagation saved'])await expect(header.getByLabel(mark,{exact:true})).toBeVisible();
   await expect(untouched.getByLabel('Propagation saved',{exact:true})).toBeVisible();
-  await page.getByLabel('Search effect sources',{exact:true}).fill('untouched');
+  await (await sidebarSearch(page,'Search effect sources')).fill('untouched');
   await expect(crate.locator('.crate-origin')).toHaveCount(1);
   await expect(header.getByLabel('Justification saved',{exact:true})).toHaveCount(0);
   await expect(header.getByLabel('Propagation saved',{exact:true})).toBeVisible();
-  await page.getByLabel('Search effect sources',{exact:true}).fill('');
+  await (await sidebarSearch(page,'Search effect sources')).fill('');
   await expect(shared.getByLabel('Justification saved',{exact:true})).toBeVisible();
   await page.screenshot({path:join(repo,'target/audit-crate-progress.png'),fullPage:true});
   await page.getByRole('button',{name:'Obligation propagated!',exact:true}).click();

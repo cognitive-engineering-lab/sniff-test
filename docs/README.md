@@ -571,8 +571,10 @@ workspace report. Reports use format version 25. Structured semantic facts may i
 optional `direct_source` metadata identifying a complete direct justification site;
 older format-25 reports without it remain readable. The audit GUI uses this identity
 for its **Effect** source groups, ranked by report count, distinct-root count,
-and source order, matching `--sort`. In inverted mode, search hides whole sources
-without changing their report-count badges or filtering their child report roots.
+and source order, matching `--sort`. In Effect mode, search matches origin names
+and source locations, excluding hidden callee and requirement metadata. Crate-name
+matches include all origins in that crate. Search hides whole sources without
+changing their report-count badges or filtering their child report roots.
 The toggle also reverses the displayed call trace while preserving step numbers.
 A finding includes
 `root-span` alongside `root` when the selected function's source location is

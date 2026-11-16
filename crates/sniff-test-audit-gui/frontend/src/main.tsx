@@ -289,9 +289,10 @@ function AuditMarks({progress,group=false}:{progress?:AuditProgress|GroupProgres
   </span>;
 }
 
-function SidebarFilters({effects,effect,level,kind,obligationMode,onChange}:{effects:string[];effect:string;level:string;kind:string;obligationMode:boolean;onChange:(effect:string,level:string,kind:string)=>void}) {
-  const [open,setOpen]=useState(false);
-  const container=useRef<HTMLDivElement>(null),trigger=useRef<HTMLButtonElement>(null),panel=useRef<HTMLDivElement>(null);
+function SidebarTools({query,searchLabel,searchPlaceholder,onSearch,effects,effect,level,kind,obligationMode,onChange}:{query:string;searchLabel:string;searchPlaceholder:string;onSearch:(query:string)=>void;effects:string[];effect:string;level:string;kind:string;obligationMode:boolean;onChange:(effect:string,level:string,kind:string)=>void}) {
+  const [open,setOpen]=useState<'search'|'filters'|null>(null);
+  const container=useRef<HTMLDivElement>(null),searchTrigger=useRef<HTMLButtonElement>(null),filterTrigger=useRef<HTMLButtonElement>(null),panel=useRef<HTMLDivElement>(null);
+  const trigger=open==='search'?searchTrigger:filterTrigger;
   const count=Number(!!effect)+Number(!!level)+Number(!obligationMode&&!!kind);
   useEffect(()=>{
     if(!open)return;
@@ -304,26 +305,35 @@ function SidebarFilters({effects,effect,level,kind,obligationMode,onChange}:{eff
     };
     place();
     panel.current?.showPopover();
-    panel.current?.querySelector('select')?.focus();
+    panel.current?.querySelector<HTMLInputElement|HTMLSelectElement>('input,select')?.focus();
     const observer=new ResizeObserver(place);
     if(container.current)observer.observe(container.current);
     window.addEventListener('resize',place);
-    const dismiss=(event:PointerEvent)=>{if(!container.current?.contains(event.target as Node))setOpen(false);};
-    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.preventDefault();setOpen(false);trigger.current?.focus();}};
+    const dismiss=(event:PointerEvent)=>{if(!container.current?.contains(event.target as Node))setOpen(null);};
+    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.preventDefault();setOpen(null);trigger.current?.focus();}};
     document.addEventListener('pointerdown',dismiss);
     document.addEventListener('keydown',escape);
     return ()=>{observer.disconnect();window.removeEventListener('resize',place);document.removeEventListener('pointerdown',dismiss);document.removeEventListener('keydown',escape);};
   },[open]);
-  return <div className="sidebar-filters" ref={container} onBlur={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node))setOpen(false);}}>
-    <button ref={trigger} type="button" className={'filter-toggle'+(count?' active':'')} aria-label={count?`Filters, ${count} active`:'Filters'} aria-expanded={open} aria-haspopup="dialog" aria-controls="finding-filters" onClick={()=>setOpen(value=>!value)}>
+  return <div className="sidebar-tools" ref={container} onBlur={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node))setOpen(null);}}>
+    <button ref={searchTrigger} type="button" className={'filter-toggle search-toggle'+(query?' active':'')} aria-label={query?'Search, active':'Search'} title="Search" aria-expanded={open==='search'} aria-haspopup="dialog" aria-controls="finding-search" onClick={()=>setOpen(value=>value==='search'?null:'search')}>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><circle cx="6.75" cy="6.75" r="4.5"/><path d="m10.2 10.2 3.55 3.55"/></svg>
+      {query&&<span className="search-active" aria-hidden="true"/>}
+    </button>
+    <button ref={filterTrigger} type="button" className={'filter-toggle'+(count?' active':'')} aria-label={count?`Filters, ${count} active`:'Filters'} aria-expanded={open==='filters'} aria-haspopup="dialog" aria-controls="finding-filters" onClick={()=>setOpen(value=>value==='filters'?null:'filters')}>
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/><path d="M5 2v4M11 6v4M7 10v4"/></svg>
       Filters{count>0&&<span className="filter-count" aria-hidden="true">{count}</span>}
     </button>
-    {open&&<div className="filter-popover" ref={panel} id="finding-filters" popover="manual" role="dialog" aria-label="Finding filters">
-      <div className="filter-heading"><strong>Filters</strong><button type="button" disabled={!count} onClick={()=>{panel.current?.querySelector('select')?.focus();onChange('','','');}}>Reset</button></div>
+    {open&&<div key={open} className="filter-popover" ref={panel} id={open==='search'?'finding-search':'finding-filters'} popover="manual" role="dialog" aria-label={open==='search'?'Finding search':'Finding filters'}>
+      {open==='search'?<>
+        <div className="filter-heading"><strong>Search</strong><button type="button" aria-label="Clear search" disabled={!query} onClick={()=>{panel.current?.querySelector('input')?.focus();onSearch('');}}>Clear</button></div>
+        <input aria-label={searchLabel} placeholder={searchPlaceholder} value={query} onChange={event=>onSearch(event.target.value)}/>
+      </>:<>
+      <div className="filter-heading"><strong>Filters</strong><button type="button" disabled={!count} onClick={()=>{panel.current?.querySelector<HTMLInputElement|HTMLSelectElement>('input,select')?.focus();onChange('','','');}}>Reset</button></div>
       <label>Effect<select aria-label="Effect" value={effect} onChange={event=>onChange(event.target.value,level,kind)}><option value="">All effects</option>{effects.map(value=><option key={value}>{value}</option>)}</select></label>
       <label>Severity<select aria-label="Severity" value={level} onChange={event=>onChange(effect,event.target.value,kind)}><option value="">All levels</option><option value="warn">Warning</option><option value="deny">Error</option></select></label>
       {!obligationMode&&<label>Finding class<select aria-label="Finding class" value={kind} onChange={event=>onChange(effect,level,event.target.value)}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(value=><option key={value}>{value}</option>)}</select></label>}
+      </>}
     </div>}
   </div>;
 }
@@ -745,8 +755,7 @@ function App() {
         {([['file','File'],['effect-source','Effect'],['obligation','Obligation']] as const).map(([value,label])=><button key={value} type="button" aria-pressed={mode===value} disabled={!!documentationEditor} onClick={()=>act(()=>changeMode(value))}>{label}</button>)}
       </div>
       {inverted&&<div className="granularity-control"><span>Group by</span><div className="granularity-segments" role="group" aria-label="Granularity">{(['origin','crate'] as const).map(value=><button key={value} type="button" aria-pressed={granularity===value} disabled={!!documentationEditor} onClick={()=>setGranularity(value)}>{value==='origin'?'Origin':'Crate'}</button>)}</div></div>}
-      <input aria-label={obligationMode?'Search obligations':inverted?'Search effect sources':'Search findings'} placeholder={obligationMode?'Search functions, obligations…':inverted?(crateMode?'Search crates or origins…':'Search effect sources…'):'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);resetPages();}}/>
-      <SidebarFilters effects={effects} effect={effect} level={level} kind={kind} obligationMode={obligationMode} onChange={(nextEffect,nextLevel,nextKind)=>{setEffect(nextEffect);setLevel(nextLevel);setKind(nextKind);resetPages();}}/>
+      <SidebarTools query={query} searchLabel={obligationMode?'Search obligations':inverted?'Search effect sources':'Search findings'} searchPlaceholder={obligationMode?'Search functions, obligations…':inverted?(crateMode?'Search crates or origins…':'Search effect sources…'):'Search files, roots, crates…'} onSearch={next=>{setQuery(next);resetPages();}} effects={effects} effect={effect} level={level} kind={kind} obligationMode={obligationMode} onChange={(nextEffect,nextLevel,nextKind)=>{setEffect(nextEffect);setLevel(nextLevel);setKind(nextKind);resetPages();}}/>
       <div className={'finding-list'+(listVisible&&groups.length?' has-rows':'')} ref={listElement} aria-busy={listLoading||listResult!==listKey} onScroll={e=>{if(listVisible)listScroll.current[modeIndex]=e.currentTarget.scrollTop;}}>{!listVisible&&(listLoading||listResult!==listKey)&&<div className="loading" role="status">Loading {obligationMode?'obligations':inverted?'effect sources':'files'}…</div>}{(listVisible?groups:[]).map(({key, label,path:sourcePath,items:rows,count,progress,trusted,loading,loadError,crate_name,item_count,effects:groupEffects},index)=>{
         const path=label||key;
         if(crateMode){
