@@ -67,7 +67,7 @@ for(const [kind,dependency,display] of [
   await expect(page.locator('.trace small').first()).toContainText(`${display}:`);
   await expect(page.locator('.trace small').first()).toHaveAttribute('title',dependency);
   expect(requestedPath).toBe(dependency);
-  await page.getByRole('button',{name:'Report root',exact:true}).click();
+  await page.getByRole('button',{name:'Root',exact:true}).click();
   await expect(page.locator('.filename')).toHaveText('src/lib.rs');
   requestedPath=null;
   await page.locator('.trace button').first().click();
@@ -136,7 +136,7 @@ test('compact sidebar exposes view segments and dismissible filters with an acti
 });
 
 async function editDocumentation(page:any,heading:string,explanation:string){
-  await page.getByRole('button',{name:'Report root',exact:true}).click();
+  await page.getByRole('button',{name:'Root',exact:true}).click();
   await page.locator('.cm-content').click();
   await page.keyboard.press('ControlOrMeta+Home');
   await page.keyboard.insertText(`/// # ${heading}\n/// ${explanation}\n`);
@@ -146,12 +146,43 @@ async function expectSimpleDetails(page:any){
   await expect(details.locator('h2')).toHaveCount(0);
   await expect(details.getByRole('heading',{name:'Requirements',exact:true})).toHaveCount(0);
   await expect(page.getByLabel('Draft documentation',{exact:true})).toHaveCount(0);
-  await expect(details.getByRole('heading',{name:'Navigate',exact:true})).toBeVisible();
-  await expect(details.locator('.details-scroll > button.link')).toHaveCount(3);
-  for(const name of ['Report root','Effect source','Contract'])
-    await expect(details.getByRole('button',{name:new RegExp('^'+name)})).toBeVisible();
+  await expect(details.getByRole('heading',{name:'Navigate',exact:true})).toHaveCount(0);
+  const shortcuts=details.getByRole('navigation',{name:'Finding navigation',exact:true});
+  await expect(shortcuts).toContainText('GO TO');
+  for(const name of ['Root','Origin'])await expect(shortcuts.getByRole('button',{name,exact:true})).toBeVisible();
+  await expect(shortcuts.getByRole('button',{name:'Contract',exact:true})).toHaveCount(0);
   await expect(details.getByRole('heading',{name:'Call trace',exact:true})).toBeVisible();
 }
+for(const documented of [false,true])test(`navigation shortcuts distinguish root and origin${documented?' and expose the contract':''}`,async({page})=>{
+  await stop();
+  await writeFile(join(dir,'src/lib.rs'),`pub fn report_root() { middle(); }
+fn middle() { origin(); }
+${documented?'/// # Panics\n/// The operation always panics.\n':''}fn origin() { panic!("intentional"); }
+`);
+  await launch();await selectFinding(page);
+  const shortcuts=page.getByRole('navigation',{name:'Finding navigation',exact:true});
+  const root=shortcuts.getByRole('button',{name:'Root',exact:true});
+  const origin=shortcuts.getByRole('button',{name:'Origin',exact:true});
+  const contract=shortcuts.getByRole('button',{name:'Contract',exact:true});
+  await expect(root).toHaveAttribute('title',/The function where this report’s trace begins/);
+  await expect(origin).toHaveAttribute('title',/The operation that introduces the effect/);
+  await root.click();
+  await expect(root).toHaveAttribute('aria-current','location');
+  await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toContain('pub fn report_root');
+  await origin.click();
+  await expect(origin).toHaveAttribute('aria-current','location');
+  await expect(root).not.toHaveAttribute('aria-current');
+  await page.getByRole('button',{name:'← Back',exact:true}).click();
+  await expect(root).toHaveAttribute('aria-current','location');
+  if(documented){
+    await expect(contract).toBeVisible();
+    await expect(contract).toHaveAttribute('title',/The relevant documented obligation/);
+    await contract.click();
+    await expect(contract).toHaveAttribute('aria-current','location');
+  }else await expect(contract).toHaveCount(0);
+  await page.screenshot({path:join(repo,`target/audit-navigation-${documented?'contract':'origin'}.png`),fullPage:true});
+});
+
 test('finding jumps follow saved edits and retain approximate deleted sites',async({page})=>{
   await selectFinding(page);
   const finding=page.locator('.finding').first();
@@ -163,9 +194,9 @@ test('finding jumps follow saved edits and retain approximate deleted sites',asy
   await finding.click();
   await expect.poll(selection).toContain('panic!');
   await expect(page.locator('.error')).toHaveCount(0);
-  await page.getByRole('button',{name:'Report root',exact:true}).click();
+  await page.getByRole('button',{name:'Root',exact:true}).click();
   await expect.poll(selection).toContain('pub fn risky');
-  await page.getByRole('button',{name:'Effect source',exact:true}).click();
+  await page.getByRole('button',{name:'Origin',exact:true}).click();
   await expect.poll(selection).toContain('panic!');
   await page.locator('.trace button').first().click();
   await expect.poll(selection).toContain('panic!');
@@ -508,7 +539,7 @@ for(const action of ['Justify here','Propagate to callers']) {
 test('source propagation attaches to the origin helper and preserves existing documentation',async({page})=>{
   await stop();const source='pub fn entry() { helper(); }\n/// Existing summary λ.\n/// # Examples\n/// An existing example.\n#[inline]\nfn helper() {\n    panic!("test");\n}\n';
   await writeFile(join(dir,'src/lib.rs'),source);await launch();await selectFinding(page);
-  await page.getByRole('button',{name:'Effect source',exact:true}).click();
+  await page.getByRole('button',{name:'Origin',exact:true}).click();
   await page.getByRole('button',{name:'Propagate to callers',exact:true}).click();
   await page.getByLabel('Source documentation',{exact:true}).fill('/// # Panics\n/// Always panics.');
   await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();
@@ -540,7 +571,7 @@ for(const newline of ['\n','\r\n'])for(const action of ['Justify here','Propagat
   const source=[...Array.from({length:180},(_,i)=>`// top padding ${i}`),'pub fn risky() {',...Array.from({length:100},(_,i)=>`    // body padding ${i}`),'    let _ready = true;','    panic!("intentional λ");','}',...Array.from({length:160},(_,i)=>`// tail padding ${i}`),''].join(newline);
   await writeFile(join(dir,'src/lib.rs'),source);await launch();await selectFinding(page);
   if(action==='Propagate to callers'){
-    await page.getByRole('button',{name:'Report root',exact:true}).click();
+    await page.getByRole('button',{name:'Root',exact:true}).click();
     await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toContain('pub fn risky');
   }
   const content=page.locator('.cm-content');
@@ -778,7 +809,7 @@ test('language server failure preserves audit navigation',async({page})=>{
   await page.route('**/api/v1/lsp/events?*',route=>route.fulfill({status:503,body:'rust-analyzer is not installed'}));
   await selectFinding(page);
   await expect(page.locator('.navigation-status')).toContainText('Rust navigation unavailable');
-  await page.getByRole('button',{name:'Report root',exact:true}).click();
+  await page.getByRole('button',{name:'Root',exact:true}).click();
   await expect(page.locator('.filename')).toContainText('src/lib.rs');
   await expect(page.locator('.cm-editor')).toBeVisible();
   const point=await identifierBounds(page,'pub fn risky()', 'risky');
@@ -796,7 +827,7 @@ test('dependency source and definition destinations are readable but not writabl
     await writeFile(join(dir,'Cargo.toml'),`[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\nnavigation-dep={path=${JSON.stringify(dependency)}}\n`);
     await writeFile(join(dir,'src/lib.rs'),'pub fn risky() {\n    navigation_dep::danger();\n}\n');
     await launch();await selectFinding(page);
-    await page.getByRole('button',{name:'Effect source',exact:true}).click();
+    await page.getByRole('button',{name:'Origin',exact:true}).click();
     await expect(page.locator('.buffer-state')).toContainText('Read-only dependency');
     await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toContain('panic!');
     await page.locator('.trace button').filter({hasText:'risky'}).first().click();
@@ -918,7 +949,7 @@ test('definition misses recover and indexing refreshes a stationary generic-meth
   await stop();
   await writeFile(join(dir,'src/lib.rs'),'pub struct Domain<T>(T);\nimpl<T> Domain<T> {\n    /// # Panics\n    fn index(&self) { panic!("test"); }\n    pub fn ensure(&self) { self.index(); }\n}\n');
   await launch();await controlledNavigation(page);await selectFinding(page);
-  await page.getByRole('button',{name:'Report root',exact:true}).click();
+  await page.getByRole('button',{name:'Root',exact:true}).click();
   await expect(page.locator('.navigation-status')).toContainText('Rust navigation ready');
   const point=await identifierBounds(page,'self.index()', 'index');
   const key=process.platform==='darwin'?'Meta':'Control';
@@ -957,7 +988,7 @@ test('editing invalidates a pending definition and retries against the new docum
   await stop();
   await writeFile(join(dir,'src/lib.rs'),'pub fn risky() { danger(); }\n\n// destination\nfn danger() { panic!("test"); }\n');
   await launch();await controlledNavigation(page);await selectFinding(page);
-  await page.getByRole('button',{name:'Report root',exact:true}).click();
+  await page.getByRole('button',{name:'Root',exact:true}).click();
   await expect(page.locator('.navigation-status')).toContainText('Rust navigation ready');
   await page.evaluate(()=>{const c=(window as any).navigationTest;c.empty=false;c.hold=true;});
   await clickIdentifier(page,'pub fn risky()', 'danger');await page.keyboard.press('F12');
@@ -981,7 +1012,7 @@ for(const width of [1440,320]) {
     await page.locator('.group').first().click();
     const finding=page.locator('.finding').filter({has:page.locator('strong',{hasText:'::selected'})});
     await expect(finding).toBeVisible();await expect(page.locator('.status')).not.toContainText('running');await finding.click();
-    await page.getByRole('button',{name:'Report root',exact:true}).click();
+    await page.getByRole('button',{name:'Root',exact:true}).click();
     await expect(page.locator('.navigation-status')).toContainText('Rust navigation ready',{timeout:30000});
     const prompt=page.locator('.inline-prompt').filter({has:page.getByRole('button',{name:'Justify here'})});
     await expect(prompt).toBeVisible();
@@ -1151,13 +1182,13 @@ test('override prompts remain usable after source autosaves make the analysis st
     await writeFile(join(dir,'Cargo.toml'),`[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\nstale-dep={path=${JSON.stringify(dependency)}}\n`);
     await writeFile(join(dir,'src/lib.rs'),'pub fn entry(flag: bool) { stale_dep::danger(flag); }\n');
     await launch();await selectFinding(page);
-    await page.getByRole('button',{name:'Report root',exact:true}).click();
+    await page.getByRole('button',{name:'Root',exact:true}).click();
     await expect(page.locator('.filename')).toHaveText('src/lib.rs');
     await expect(page.locator('.cm-content')).not.toHaveAttribute('aria-readonly','true');
     await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');await page.keyboard.insertText('// root edit\n');
     await page.keyboard.press('ControlOrMeta+s');await expect(page.getByLabel('Source save status')).toHaveText('Saved');
     await expect(page.locator('.status')).toContainText('stale');
-    await page.getByRole('button',{name:'Effect source',exact:true}).click();
+    await page.getByRole('button',{name:'Origin',exact:true}).click();
     for(const label of ['Justify via override','Propagate obligations via override'])await expect(page.getByRole('button',{name:label,exact:true})).toBeVisible();
     await page.getByRole('button',{name:'Justify via override',exact:true}).click();
     await page.getByLabel('Override documentation').fill('// PANIC: The caller validates the flag.');
@@ -1227,10 +1258,10 @@ for(const action of ['Justify via override','Propagate obligations via override'
           await page.locator('.cm-content').focus();
           await page.keyboard.press('Escape');
           await expect(dialog).toBeVisible();
-          await page.getByRole('button',{name:'Report root',exact:true}).click();
+          await page.getByRole('button',{name:'Root',exact:true}).click();
           await expect(page.locator('.filename')).toHaveText('src/lib.rs');
           await expect(dialog.getByLabel('Override documentation')).toHaveValue(draft);
-          await page.getByRole('button',{name:'Effect source',exact:true}).click();
+          await page.getByRole('button',{name:'Origin',exact:true}).click();
           await page.getByRole('button',{name:alternative,exact:true}).click();
           await expect(dialog).toHaveAccessibleName(action);
           await expect(dialog.getByLabel('Override documentation')).toHaveValue(draft);
@@ -1913,8 +1944,8 @@ test('invert obligation aggregates callsites and records effect-specific ignores
   await reports.first().click();
   await expect(page.getByLabel('Selected effect',{exact:true})).toBeVisible();
   await expect(page.locator('.trace')).toBeVisible();
-  await expect(page.getByRole('button',{name:'Report root',exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'Report root',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Root',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Root',exact:true}).click();
   await expect(page.getByRole('button',{name:'Justify here',exact:true})).toBeVisible();
   await expect(page.getByRole('button',{name:'Propagate to callers',exact:true})).toBeVisible();
   await rows.first().click();

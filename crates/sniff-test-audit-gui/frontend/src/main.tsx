@@ -730,6 +730,15 @@ function App() {
       return from<=editorSelection.from && editorSelection.from<(to===from?to+1:to);
     }) : -1;
   const highlightedTraceIndex=activeTraceIndex>=0?activeTraceIndex:activeTraceCaretIndex;
+  const findingDestinations=([
+    ['root','Root','The function where this report’s trace begins.'],
+    ['source','Origin','The operation that introduces the effect.'],
+    ['contract','Contract','The relevant documented obligation.'],
+  ] as const).map(([kind,label,description])=>({kind,label,description,location:destination(selected,kind)}))
+    .filter(entry=>entry.kind!=='contract'||entry.location?.available);
+  const activeDestination=buffer&&!unsaved&&editorSelection?.path===buffer.path
+    ?findingDestinations.find(({location})=>location?.available&&location.path===buffer.path&&editorSelection.from===editorPosition(buffer.content,location.start)&&editorSelection.to===editorPosition(buffer.content,location.end))?.kind
+    :undefined;
   return <div className="app">
     <header><div className="brand"><b>sniff-test</b><span> / audit</span></div><span className="workspace" title={root}>{root}</span><span className={'status '+status.status}>{status.status}{status.stale?' · stale':status.overrides_changed?' · reanalysis needed':''}</span><button disabled={status.running||startingAnalysis||busy} onClick={()=>act(reanalyze)}>↻ Reanalyze</button></header>
     {error&&<div className="error" role="alert">{error}<button onClick={()=>setError('')}>Dismiss</button></div>}
@@ -772,7 +781,7 @@ function App() {
 
     </main>
     <div className="side-pane right-pane" id="details-panel"><PanelDivider side="right" size={rightWidth} onResize={setRightWidth}/><aside className="details" aria-label="Effect details">{inspectingObligation?obligation?<section className="effect-summary" aria-label="Selected obligation"><div className="section-title">OBLIGATION DETAILS</div><p>{obligation.namespace}</p><p>{obligation.effect} · {obligation.count} reports</p><p>{obligation.trusted?'Ignored · reanalyze to update findings':'Ignore this function’s obligations for this effect by adding it to ignored-namespaces.'}</p><small>{obligation.config_path}</small></section>:<div className="empty">Select an obligation to inspect its documentation.</div>:selected?<><section className="effect-summary" aria-label="Selected effect"><div className="section-title">FINDING DETAILS</div><p>{selected.reason}</p><small>{selected.crate_name} · trace {selected.trace_id||'unavailable'}</small></section>
-      <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Navigation and call trace"><h3>Navigate</h3>{[['Report root','root'],['Effect source','source'],['Contract','contract']].map(([label,kind])=><button className="link" key={label} disabled={!destination(selected,kind as 'source'|'root'|'contract')?.available} onClick={()=>act(()=>navigateFinding(kind as 'source'|'root'|'contract'))}>{label}{!destination(selected,kind as 'source'|'root'|'contract')?.available?' · unavailable':''}</button>)}
+      <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Navigation and call trace"><nav className="finding-navigation" aria-label="Finding navigation"><span>GO TO</span>{findingDestinations.map(({kind,label,description,location})=><button type="button" key={kind} disabled={!location?.available} aria-current={activeDestination===kind?'location':undefined} title={description+(location?.available?`\n${displaySourcePath(location.path,root)}${location.line?':'+location.line:''}`:' Source unavailable.')} onClick={()=>act(()=>navigateFinding(kind))}>{label}</button>)}</nav>
       {selected.audit&&!selected.audit.targets.length&&<p className="hint">No verified documentation attachment location is available. Inspect the source and edit manually where appropriate.</p>}
       {status.override_error?<p className="hint" role="alert">{status.override_error}</p>:null}
       {target?.approximate?<p className="hint" role="status">Approximate location; reanalyze to refresh.</p>:null}
