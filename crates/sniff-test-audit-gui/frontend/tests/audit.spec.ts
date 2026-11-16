@@ -1824,7 +1824,7 @@ pub fn caller_${i}() { contract_${String(i).padStart(2,'0')}(); }
 
 test('invert obligation aggregates callsites and records effect-specific trust',async({page})=>{
   await stop();
-  const source='/// # Panics\n/// Capacity must be available.\npub fn contracted() {}\n\n/// # Panics\n/// Other condition.\npub fn other_contract() {}\n\npub fn first() { contracted(); other_contract(); }\npub fn second() { contracted(); }\n';
+  const source='/// # Panics\n/// Capacity must be available.\npub fn contracted() {}\n\n/// # Panics\n/// Other condition.\npub fn other_contract() {}\n\npub fn first() {\n    contracted();\n    other_contract();\n}\npub fn second() {\n    contracted();\n}\n';
   await writeFile(join(dir,'src/lib.rs'),source);
   await writeFile(join(dir,'sniff-test.toml'),'# preserve config comment\n[panic]\ntrusted-boundary-namespaces = []\n[safety]\nignored-namespaces = ["untouched"]\n');
   await launch();await page.goto(url);
@@ -1851,6 +1851,20 @@ test('invert obligation aggregates callsites and records effect-specific trust',
   await expect(page.getByRole('button',{name:'Justify here',exact:true})).toHaveCount(0);
   await expect(page.getByRole('button',{name:'Propagate to callers',exact:true})).toHaveCount(0);
   await expect(page.locator('.trace')).toHaveCount(0);
+  await expect(rows.first()).toHaveAttribute('aria-expanded','true');
+  const reports=page.locator('.finding-list .finding');
+  await expect(reports).toHaveCount(Number(count));
+  await reports.first().click();
+  await expect(page.getByLabel('Selected effect',{exact:true})).toBeVisible();
+  await expect(page.locator('.trace')).toBeVisible();
+  await expect(page.getByRole('button',{name:'Report root',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Report root',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Justify here',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Propagate to callers',exact:true})).toBeVisible();
+  await rows.first().click();
+  await expect(page.locator('.trace')).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Trust this function',exact:true})).toBeVisible();
+  await rows.first().click();
   await page.screenshot({path:join(repo,'target/audit-invert-obligation.png'),fullPage:true});
   await page.getByRole('button',{name:'Trust this function',exact:true}).click();
   expect(await readFile(join(dir,'sniff-test.toml'),'utf8')).not.toContain('audit_browser_fixture::contracted');
@@ -2309,3 +2323,40 @@ for(const closure of [false,true])for(const [effect,heading,marker] of [['panic'
   await expect(page.getByRole('button',{name:'Justify here',exact:true})).toBeVisible();
  });
 }
+
+
+test('obligation dropdown paginates all reports, retries reads, and retains expansion across modes',async({page})=>{
+  await stop();
+  await writeFile(join(dir,'src/lib.rs'),'/// # Panics\n/// Capacity must be available.\npub fn contracted() {}\n'+Array.from({length:105},(_,i)=>`pub fn caller_${i}() { contracted(); }`).join('\n'));
+  await launch();await page.goto(url);
+  await expect(page.locator('.status')).not.toContainText('running');
+  await page.getByLabel('Display mode',{exact:true}).selectOption('obligation');
+  const header=page.locator('.obligation-row');
+  await expect(header).toHaveCount(1);
+  await expect(header.locator('.group-count')).toHaveText('105');
+  let fail=true;
+  await page.route('**/api/v1/group-items?*',async route=>{
+    if(fail){fail=false;await route.fulfill({status:500,json:{error:'Trace list unavailable'}});}
+    else await route.continue();
+  });
+  await header.click();
+  await expect(page.locator('.finding-list').getByRole('alert')).toContainText('Trace list unavailable');
+  await page.locator('.finding-list').getByRole('button',{name:'Retry',exact:true}).click();
+  const reports=page.locator('.finding-list .finding');
+  await expect(reports).toHaveCount(100);
+  await page.getByRole('button',{name:'Load more (100 of 105)',exact:true}).click();
+  await expect(reports).toHaveCount(105);
+  await expect(page.locator('.load-more')).toHaveCount(0);
+  await header.click();
+  await expect(header).toHaveAttribute('aria-expanded','false');
+  await expect(reports).toHaveCount(0);
+  await header.click();
+  await expect(reports).toHaveCount(105);
+  await page.getByLabel('Display mode',{exact:true}).selectOption('effect-source');
+  await page.getByLabel('Display mode',{exact:true}).selectOption('obligation');
+  await expect(header).toHaveAttribute('aria-expanded','true');
+  await expect(reports).toHaveCount(105);
+  await page.getByRole('button',{name:'Reanalyze',exact:false}).click();
+  await expect(page.locator('.status')).not.toContainText('running');
+  await expect(reports).toHaveCount(105);
+});

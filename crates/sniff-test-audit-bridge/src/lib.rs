@@ -1462,3 +1462,8 @@ mod tests {
         }
     }
 }
+
+/// Lightweight report row shared by audit list views.
+pub fn finding_summary(f: &Finding) -> serde_json::Value {
+    serde_json::json!({"id":f.id,"crate_name":f.crate_name,"root":f.root,"reason":f.reason,"level":f.level,"effect":f.effect,"class":f.class,"path":f.audit.as_ref().and_then(|a| a.source.as_ref()).map(|l| &l.path)})
+}

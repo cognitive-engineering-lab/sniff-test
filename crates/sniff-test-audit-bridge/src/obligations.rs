@@ -92,6 +92,7 @@ pub fn group_obligations(findings: &[&Finding], query: &str) -> Vec<ObligationSu
                 items: Vec::new(),
             });
         group.count += 1;
+        group.items.push(finding_summary(finding));
     }
     let mut groups: Vec<_> = groups
         .into_values()
@@ -257,11 +258,20 @@ mod tests {
         let groups = group_obligations(&refs, "");
         assert_eq!(groups.len(), 3);
         assert_eq!(groups[0].count, 2);
+        assert_eq!(
+            groups[0]
+                .items
+                .iter()
+                .map(|item| item["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
         assert_eq!(groups.iter().map(|g| g.count).sum::<usize>(), 4);
         // Matching one report's documentation retains the whole definition's count.
         let matches = group_obligations(&refs, "\na");
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].count, 2);
+        assert_eq!(matches[0].items, groups[0].items);
         assert!(group_obligations(&refs, "no such function").is_empty());
     }
 

@@ -14,7 +14,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sniff_test_audit_bridge::{OverrideEditorTarget, Session};
+use sniff_test_audit_bridge::{OverrideEditorTarget, Session, finding_summary};
 use std::{
     convert::Infallible,
     sync::{Arc, Mutex},
@@ -584,10 +584,6 @@ fn annotate_crate_progress(group: &mut Value, session: &Session) {
             .map(|id| id.as_str().unwrap()),
         session,
     );
-}
-
-fn finding_summary(f: &sniff_test_audit_bridge::Finding) -> serde_json::Value {
-    json!({"id":f.id,"crate_name":f.crate_name,"root":f.root,"reason":f.reason,"level":f.level,"effect":f.effect,"class":f.class,"path":f.audit.as_ref().and_then(|a| a.source.as_ref()).map(|l| &l.path)})
 }
 
 fn group_effect_sources(
@@ -1628,6 +1624,24 @@ mod tests {
         .0;
         assert_eq!(searched["total"], 3);
         assert_eq!(searched["total_groups"], 1);
+        assert_eq!(searched["groups"][0]["items"].as_array().unwrap().len(), 3);
+        let mut params = url::form_urlencoded::Serializer::new(String::new());
+        params
+            .append_pair("group_by", "obligation")
+            .append_pair("group_key", searched["groups"][0]["key"].as_str().unwrap())
+            .append_pair("q", "Available capacity")
+            .append_pair("offset", "1")
+            .append_pair("limit", "1");
+        let rows = group_items(State(app.clone()), query(&params.finish()))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        assert_eq!(rows["total"], 3);
+        assert_eq!(rows["items"].as_array().unwrap().len(), 1);
+        assert_eq!(rows["items"][0]["id"], "1");
+        assert!(rows["items"][0].get("progress").is_some());
+
         let detail = obligation(
             State(app.clone()),
             Query(ObligationId {
