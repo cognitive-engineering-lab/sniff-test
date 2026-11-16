@@ -740,7 +740,7 @@ function App() {
     ?findingDestinations.find(({location})=>location?.available&&location.path===buffer.path&&editorSelection.from===editorPosition(buffer.content,location.start)&&editorSelection.to===editorPosition(buffer.content,location.end))?.kind
     :undefined;
   return <div className="app">
-    <header><div className="brand"><b>sniff-test</b><span> / audit</span></div><span className="workspace" title={root}>{root}</span><span className={'status '+status.status}>{status.status}{status.stale?' · stale':status.overrides_changed?' · reanalysis needed':''}</span><button disabled={status.running||startingAnalysis||busy} onClick={()=>act(reanalyze)}>↻ Reanalyze</button></header>
+    <header><div className="brand"><b>sniff-test</b><span> / audit</span></div><span className="workspace">{root.split(/[\\/]/).filter(Boolean).pop()}</span><span className={'status '+status.status}>{status.status}{status.stale?' · stale':status.overrides_changed?' · reanalysis needed':''}</span><button disabled={status.running||startingAnalysis||busy} onClick={()=>act(reanalyze)}>↻ Reanalyze</button></header>
     {error&&<div className="error" role="alert">{error}<button onClick={()=>setError('')}>Dismiss</button></div>}
     <div className="layout" style={{'--left-size':`${leftWidth}px`,'--right-size':`${rightWidth}px`} as React.CSSProperties}><div className="side-pane left-pane" id="findings-panel"><aside className="findings"><div className="section-title">FINDINGS <span>{total}</span></div>
       <div className="display-segments" role="group" aria-label="Display mode">
