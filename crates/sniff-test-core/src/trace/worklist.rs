@@ -15,7 +15,7 @@ use crate::effects::concrete::{
     ConcreteEffect, ConcreteEffectState, ConcreteSource, ConcreteTermination,
 };
 use crate::effects::obligation::{
-    ContractId, ObligationTermination, TrackedEffect, TrackedOrigin, TrackedState,
+    ContractId, ObligationState, ObligationTermination, TrackedEffect, TrackedOrigin, TrackedState,
     TrackedTermination,
 };
 
@@ -72,6 +72,7 @@ pub fn trace_effect(
         concrete_queue: VecDeque::new(),
         documentation_queue: VecDeque::new(),
         seen: HashSet::new(),
+        documentation_seen: HashSet::new(),
         reached: BTreeSet::new(),
     };
     tracer.concrete_pass();
@@ -84,8 +85,8 @@ pub fn trace_effect(
 struct DocumentationSeed {
     contract: ContractId,
     function: FunctionId,
-    /// The node whose path reached `function`'s contract. Its trust context
-    /// and depth carry over; an independent seed starts a fresh path.
+    /// The node whose path reached `function`'s contract. Only its trust context
+    /// carries over; the predecessor is retained as a diagnostic witness.
     handoff_from: Option<TraceNodeId>,
 }
 
@@ -96,13 +97,14 @@ struct Tracer<'t, 'e, 'a, 'c> {
     options: TraceOptions,
     routes: &'t RootRoutes,
     trace: DomainTrace,
-    /// Seed lineage for each trace node. Contract handoffs keep their parent's seed.
+    /// Budget lineage for each trace node. Contract handoffs start a fresh seed.
     node_seeds: Vec<usize>,
     /// Accepted node count for each independently started seed.
     seed_states: Vec<usize>,
     concrete_queue: VecDeque<TraceNodeId>,
     documentation_queue: VecDeque<TraceNodeId>,
     seen: HashSet<(Origin, FunctionId, State, usize)>,
+    documentation_seen: HashSet<(ContractId, FunctionId, ObligationState)>,
     reached: BTreeSet<(ContractId, FunctionId)>,
 }
 
@@ -197,25 +199,16 @@ impl Tracer<'_, '_, '_, '_> {
         {
             return;
         }
-        let (trust, depth, predecessor) = match handoff_from {
+        let (trust, predecessor) = match handoff_from {
             Some(parent) => {
-                if self.contract_in_ancestry(parent, contract) {
-                    let origin = *self.trace.nodes[parent.index()].origin();
-                    self.unknown_at(origin, parent, UnknownBoundaryKind::Cycle);
-                    return;
-                }
                 let node = &self.trace.nodes[parent.index()];
                 let trust = match node.state() {
                     TrackedState::Concrete(state) => state.trust_path().clone(),
                     TrackedState::Obligation(state) => state.trust_path().clone(),
                 };
-                (
-                    Some(trust),
-                    node.depth(),
-                    Some((parent, PropagationEdge::Handoff)),
-                )
+                (Some(trust), Some((parent, PropagationEdge::Handoff)))
             }
-            None => (None, 0, None),
+            None => (None, None),
         };
         let Some(seed) = self
             .tracked
@@ -224,14 +217,20 @@ impl Tracer<'_, '_, '_, '_> {
         else {
             return;
         };
+        let key = (contract, function, seed.state.clone());
+        if self.documentation_seen.contains(&key) {
+            self.reached.insert((contract, function));
+            return;
+        }
         if let Some(node) = self.add_node(
             TrackedOrigin::Contract(contract),
             function,
             TrackedState::Obligation(seed.state),
-            depth,
+            0,
             predecessor,
             false,
         ) {
+            self.documentation_seen.insert(key);
             self.reached.insert((contract, function));
             self.documentation_queue.push_back(node);
         }
@@ -402,7 +401,8 @@ impl Tracer<'_, '_, '_, '_> {
         predecessor: Option<(TraceNodeId, PropagationEdge)>,
         dedup: bool,
     ) -> Option<TraceNodeId> {
-        if let Some((parent, _)) = predecessor
+        if let Some((parent, propagation)) = predecessor
+            && propagation != PropagationEdge::Handoff
             && self.same_ancestor(parent, origin, function, &state)
         {
             self.unknown_at(origin, parent, UnknownBoundaryKind::Cycle);
@@ -411,7 +411,9 @@ impl Tracer<'_, '_, '_, '_> {
         if dedup && !self.seen.insert((origin, function, state.clone(), depth)) {
             return None;
         }
-        let seed = if let Some((parent, _)) = predecessor {
+        let seed = if let Some((parent, propagation)) = predecessor
+            && propagation != PropagationEdge::Handoff
+        {
             self.node_seeds[parent.index()]
         } else {
             let seed = self.seed_states.len();
@@ -452,7 +454,9 @@ impl Tracer<'_, '_, '_, '_> {
         std::iter::successors(Some(&self.trace.nodes[node.index()]), |current| {
             current
                 .predecessor()
-                .map(|edge| &self.trace.nodes[self.trace.edges[edge.index()].from.index()])
+                .map(|edge| &self.trace.edges[edge.index()])
+                .filter(|edge| edge.propagation != PropagationEdge::Handoff)
+                .map(|edge| &self.trace.nodes[edge.from.index()])
         })
     }
 
@@ -468,12 +472,6 @@ impl Tracer<'_, '_, '_, '_> {
                 && current.function() == function
                 && current.state() == state
         })
-    }
-
-    fn contract_in_ancestry(&self, node: TraceNodeId, contract: ContractId) -> bool {
-        self.ancestry(node).any(
-            |current| matches!(current.origin(), TrackedOrigin::Contract(id) if *id == contract),
-        )
     }
 
     fn handled(

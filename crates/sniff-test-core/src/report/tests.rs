@@ -102,6 +102,10 @@ enum ContractBoundaryScenario {
     CallerContract,
     DocumentationChain,
     DistinctOperations,
+    ManyOperations,
+    EqualTrust,
+    DistinctTrust,
+    DistinctContractBudgets,
     BudgetDistinctOperations,
     ContractCycle,
     BudgetAcrossHandoff,
@@ -114,7 +118,12 @@ enum ContractBoundaryScenario {
 fn contract_boundary_trace(
     scenario: ContractBoundaryScenario,
 ) -> (super::ConcreteTrace, ArtifactFacts) {
-    let source_in_callee = matches!(scenario, ContractBoundaryScenario::NestedOperation);
+    let source_in_callee = matches!(
+        scenario,
+        ContractBoundaryScenario::NestedOperation
+            | ContractBoundaryScenario::EqualTrust
+            | ContractBoundaryScenario::DistinctTrust
+    );
     let include_operation = !matches!(
         scenario,
         ContractBoundaryScenario::DocumentationOnly | ContractBoundaryScenario::DocumentationChain
@@ -125,14 +134,35 @@ fn contract_boundary_trace(
         ContractBoundaryScenario::CallerContract
             | ContractBoundaryScenario::DocumentationChain
             | ContractBoundaryScenario::ContractCycle
+            | ContractBoundaryScenario::DistinctContractBudgets
     );
-    let max_depth = if source_in_callee { 1 } else { 3 };
-    let root = stable_function(9_970);
-    let documented = stable_function(9_971);
+    let max_depth = if matches!(scenario, ContractBoundaryScenario::NestedOperation) {
+        1
+    } else {
+        3
+    };
+    let shared_crate = matches!(
+        scenario,
+        ContractBoundaryScenario::EqualTrust | ContractBoundaryScenario::DistinctTrust
+    );
+    let root = if shared_crate {
+        function_in_crate(9_970, 0)
+    } else {
+        stable_function(9_970)
+    };
+    let documented = if shared_crate {
+        function_in_crate(9_970, 1)
+    } else {
+        stable_function(9_971)
+    };
     let source = if matches!(scenario, ContractBoundaryScenario::ContractCycle) {
         root
     } else if source_in_callee {
-        stable_function(9_972)
+        if shared_crate {
+            function_in_crate(9_970, 2)
+        } else {
+            stable_function(9_972)
+        }
     } else {
         documented
     };
@@ -186,6 +216,14 @@ fn contract_boundary_trace(
         },
         if source_in_callee || !include_operation {
             Vec::new()
+        } else if matches!(scenario, ContractBoundaryScenario::ManyOperations) {
+            (0..128)
+                .map(|id| {
+                    let mut operation = operation.clone();
+                    operation.id = EffectId::new(id);
+                    operation
+                })
+                .collect()
         } else if matches!(
             scenario,
             ContractBoundaryScenario::DistinctOperations
@@ -212,11 +250,46 @@ fn contract_boundary_trace(
             "sample::source",
             Vec::new(),
             if include_operation {
-                vec![operation]
+                vec![operation.clone()]
             } else {
                 Vec::new()
             },
             source_markers,
+            Vec::new(),
+        ));
+    }
+    if matches!(
+        scenario,
+        ContractBoundaryScenario::EqualTrust | ContractBoundaryScenario::DistinctTrust
+    ) {
+        let second_source = if matches!(scenario, ContractBoundaryScenario::DistinctTrust) {
+            function_in_crate(123, 9_973)
+        } else {
+            function_in_crate(9_970, 3)
+        };
+        let entry = if matches!(scenario, ContractBoundaryScenario::EqualTrust) {
+            let helper = function_in_crate(9_970, 4);
+            functions.push(body(
+                helper,
+                "sample::helper",
+                vec![call(0, target(second_source, "sample::second_source"))],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ));
+            helper
+        } else {
+            second_source
+        };
+        functions[1]
+            .calls
+            .push(call(2, target(entry, "sample::second_entry")));
+        functions.push(body(
+            second_source,
+            "sample::second_source",
+            Vec::new(),
+            vec![operation],
+            Vec::new(),
             Vec::new(),
         ));
     }
@@ -256,6 +329,7 @@ fn contract_boundary_trace(
                     scenario,
                     ContractBoundaryScenario::BudgetAcrossHandoff
                         | ContractBoundaryScenario::BudgetDistinctOperations
+                        | ContractBoundaryScenario::DistinctContractBudgets
                 ) {
                     1
                 } else {
@@ -493,7 +567,7 @@ fn locally_justified_operation_still_exposes_documented_contract() {
 }
 
 #[test]
-fn handoff_inherits_depth_when_operation_is_nested() {
+fn handoff_starts_with_fresh_depth_when_operation_is_nested() {
     let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::NestedOperation);
     assert!(trace.handled().any(|handled| matches!(
         handled.termination(),
@@ -504,10 +578,10 @@ fn handoff_inherits_depth_when_operation_is_nested() {
             .nodes()
             .filter(|node| matches!(node.origin(), super::TrackedOrigin::Contract(_)))
             .count(),
-        1
+        2
     );
     assert!(
-        trace
+        !trace
             .unknown()
             .any(|unknown| unknown.boundary().kind()
                 == crate::trace::UnknownBoundaryKind::TraceDepth)
@@ -515,7 +589,7 @@ fn handoff_inherits_depth_when_operation_is_nested() {
 }
 
 #[test]
-fn handoff_keeps_its_seed_budget_and_failed_handoff_leaves_independent_contract() {
+fn handoff_starts_with_fresh_budget_and_suppresses_independent_seed() {
     let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::BudgetAcrossHandoff);
     assert_eq!(
         trace
@@ -535,10 +609,16 @@ fn handoff_keeps_its_seed_budget_and_failed_handoff_leaves_independent_contract(
         trace.unknown().any(|unknown| unknown.boundary().kind()
             == crate::trace::UnknownBoundaryKind::TraceStateBudget)
     );
+    let documentation = trace
+        .nodes()
+        .find(|node| matches!(node.origin(), super::TrackedOrigin::Contract(_)))
+        .expect("accepted documentation handoff");
+    assert_eq!(documentation.depth(), 0);
+    assert!(documentation.predecessor().is_some());
 }
 
 #[test]
-fn one_seed_exhausting_its_budget_does_not_block_another_seed() {
+fn equivalent_handoffs_share_one_fresh_documentation_budget() {
     let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::BudgetDistinctOperations);
     assert_eq!(
         trace
@@ -563,7 +643,7 @@ fn one_seed_exhausting_its_budget_does_not_block_another_seed() {
             .filter(|unknown| unknown.boundary().kind()
                 == crate::trace::UnknownBoundaryKind::TraceStateBudget)
             .count(),
-        3
+        1
     );
 }
 
@@ -616,7 +696,7 @@ fn independent_contract_reaches_caller_contract_before_its_seed() {
 }
 
 #[test]
-fn distinct_operations_keep_distinct_contract_handoffs() {
+fn distinct_operations_share_equivalent_contract_handoff() {
     let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::DistinctOperations);
     assert_eq!(
         trace
@@ -641,12 +721,104 @@ fn distinct_operations_keep_distinct_contract_handoffs() {
                         ))
             )
             .count(),
-        2
+        1
     );
 }
 
 #[test]
-fn contract_handoffs_stop_at_a_contract_cycle() {
+fn many_operations_share_one_documentation_traversal() {
+    let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::ManyOperations);
+    assert_eq!(
+        trace
+            .nodes()
+            .filter(|node| matches!(node.origin(), super::TrackedOrigin::Concrete(_)))
+            .count(),
+        128
+    );
+    assert_eq!(
+        trace
+            .nodes()
+            .filter(|node| matches!(node.origin(), super::TrackedOrigin::Contract(_)))
+            .count(),
+        2
+    );
+    assert_eq!(trace.escaped().count(), 1);
+}
+
+#[test]
+fn contract_handoffs_merge_equal_trust_and_keep_distinct_trust() {
+    for (scenario, expected_starts) in [
+        (ContractBoundaryScenario::EqualTrust, 1),
+        (ContractBoundaryScenario::DistinctTrust, 2),
+    ] {
+        let (trace, _) = contract_boundary_trace(scenario);
+        let starts = trace
+            .nodes()
+            .filter(|node| {
+                matches!(node.origin(), super::TrackedOrigin::Contract(_)) && node.depth() == 0
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(starts.len(), expected_starts);
+        if matches!(scenario, ContractBoundaryScenario::EqualTrust) {
+            let mut incoming_depths = trace
+                .handled()
+                .filter(|handled| {
+                    matches!(
+                        handled.termination(),
+                        super::TrackedTermination::ContractBoundary
+                    )
+                })
+                .map(|handled| trace.node(handled.node().unwrap()).unwrap().depth())
+                .collect::<Vec<_>>();
+            incoming_depths.sort_unstable();
+            assert_eq!(incoming_depths, [1, 2]);
+        }
+        assert_eq!(
+            trace
+                .handled()
+                .filter(|handled| matches!(
+                    handled.termination(),
+                    super::TrackedTermination::ContractBoundary
+                ))
+                .count(),
+            2
+        );
+        if let [first, second] = starts.as_slice() {
+            assert_eq!(first.origin(), second.origin());
+            let super::TrackedState::Obligation(first) = first.state() else {
+                panic!("documentation state");
+            };
+            let super::TrackedState::Obligation(second) = second.state() else {
+                panic!("documentation state");
+            };
+            assert_ne!(first.trust_path(), second.trust_path());
+        }
+    }
+}
+
+#[test]
+fn distinct_contracts_keep_their_identity_and_own_budget() {
+    let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::DistinctContractBudgets);
+    let starts = trace
+        .nodes()
+        .filter(|node| matches!(node.origin(), super::TrackedOrigin::Contract(_)))
+        .collect::<Vec<_>>();
+    assert_eq!(starts.len(), 2);
+    assert_ne!(starts[0].origin(), starts[1].origin());
+    assert!(starts.iter().all(|node| node.depth() == 0));
+    assert_eq!(trace.escaped().count(), 1);
+    assert_eq!(
+        trace
+            .unknown()
+            .filter(|unknown| unknown.boundary().kind()
+                == crate::trace::UnknownBoundaryKind::TraceStateBudget)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn contract_handoffs_reuse_completed_obligations_in_a_contract_cycle() {
     let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::ContractCycle);
     assert!(trace.handled().any(|handled| matches!(
         handled.termination(),
@@ -655,6 +827,19 @@ fn contract_handoffs_stop_at_a_contract_cycle() {
         )
     )));
     assert!(trace.nodes().count() < 100);
+    assert_eq!(
+        trace
+            .nodes()
+            .filter(
+                |node| matches!(node.origin(), super::TrackedOrigin::Contract(_))
+                    && node.depth() == 0
+            )
+            .count(),
+        // The fixture's functions belong to distinct crates. Returning to the
+        // first contract once expands its trust context, then reuses it.
+        3
+    );
+    assert_eq!(trace.unknown().count(), 0);
 }
 
 #[test]
